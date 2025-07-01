@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+“””
+Script pour modifier la colonne vm_template d’un fichier CSV
+Remplace toute valeur contenant “V-” par “V-ISIOPERATION” uniquement
+“””
+
+import pandas as pd
+import sys
+import os
+
+def modifier_csv(fichier_csv):
+“””
+Modifie le fichier CSV en remplaçant toute valeur contenant “V-”
+par “V-ISIOPERATION” uniquement dans la colonne vm_template
+
+```
+Args:
+    fichier_csv (str): Chemin vers le fichier CSV à modifier
+"""
+try:
+    # Vérifier que le fichier existe
+    if not os.path.exists(fichier_csv):
+        print(f"Erreur: Le fichier '{fichier_csv}' n'existe pas.")
+        return False
+    
+    # Lire le fichier CSV
+    print(f"Lecture du fichier: {fichier_csv}")
+    df = pd.read_csv(fichier_csv)
+    
+    # Vérifier que la colonne vm_template existe
+    if 'vm_template' not in df.columns:
+        print("Erreur: La colonne 'vm_template' n'existe pas dans le fichier CSV.")
+        print(f"Colonnes disponibles: {list(df.columns)}")
+        return False
+    
+    # Afficher quelques exemples avant modification
+    print("\nExemples de valeurs avant modification:")
+    print(df['vm_template'].head(10).to_string())
+    
+    # Remplacer toute valeur contenant "V-" par "V-ISIOPERATION" uniquement
+    mask = df['vm_template'].astype(str).str.contains('V-', na=False)
+    df.loc[mask, 'vm_template'] = 'V-ISIOPERATION'
+    
+    # Afficher quelques exemples après modification
+    print("\nExemples de valeurs après modification:")
+    print(df['vm_template'].head(10).to_string())
+    
+    # Sauvegarder le fichier modifié (écrase le fichier original)
+    df.to_csv(fichier_csv, index=False)
+    print(f"\nFichier modifié et sauvegardé: {fichier_csv}")
+    
+    # Statistiques
+    total_lignes = len(df)
+    lignes_modifiees = mask.sum()
+    print(f"Total de lignes: {total_lignes}")
+    print(f"Lignes modifiées: {lignes_modifiees}")
+    
+    return True
+    
+except Exception as e:
+    print(f"Erreur lors du traitement du fichier: {e}")
+    return False
+```
+
+def main():
+“”“Fonction principale du script”””
+# Vérifier les arguments de la ligne de commande
+if len(sys.argv) != 2:
+print(“Usage: python script.py <fichier_csv>”)
+print(“Exemple: python script.py mon_fichier.csv”)
+sys.exit(1)
+
+```
+fichier_csv = sys.argv[1]
+
+print("=" * 50)
+print("MODIFICATION CSV - COLONNE vm_template")
+print("=" * 50)
+
+# Exécuter la modification
+if modifier_csv(fichier_csv):
+    print("\n✅ Modification terminée avec succès!")
+else:
+    print("\n❌ Erreur lors de la modification.")
+    sys.exit(1)
+```
+
+if **name** == “**main**”:
+main()
