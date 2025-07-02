@@ -1,0 +1,50 @@
+import ssl
+import click
+from pyVim.connect import SmartConnect, Disconnect
+from pyVmomi import vim
+import atexit
+import sys
+
+def get_all_vms(content):
+    obj_view = content.viewManager.CreateContainerView(content.rootFolder, [vim.VirtualMachine], True)
+    vms = obj_view.view
+    obj_view.Destroy()
+    return vms
+
+@click.command()
+@click.option('--user', '-u', required=True, help='Nom d\'utilisateur vCenter')
+@click.option('--password', '-p', required=True, hide_input=True, help='Mot de passe vCenter')
+@click.option('--vcenter', '-v', required=True, help='Adresse du serveur vCenter')
+@click.option('--search', '-s', required=True, help='Valeur à rechercher dans les remarques ("Build via ...")')
+@click.option('--port', default=443, show_default=True, help='Port de connexion au vCenter')
+def main(user, password, vcenter, search, port):
+    # Désactiver la vérification SSL (attention en production !)
+    context = ssl._create_unverified_context()
+    try:
+        si = SmartConnect(host=vcenter, user=user, pwd=password, port=port, sslContext=context)
+    except Exception as e:
+        click.echo(f"Erreur de connexion à vCenter : {e}")
+        sys.exit(1)
+    atexit.register(Disconnect, si)
+
+    content = si.RetrieveContent()
+    vms = get_all_vms(content)
+
+    found = False
+    search_string = f"Build via {search}".lower()
+    for vm in vms:
+        annotation = getattr(vm.summary.config, 'annotation', '')
+        if annotation and search_string in annotation.lower():
+            found = True
+            click.echo(f"Nom VM       : {vm.name}")
+            click.echo(f"UUID         : {vm.config.uuid}")
+            click.echo(f"Etat         : {vm.runtime.powerState}")
+            click.echo(f"OS invité    : {vm.summary.config.guestFullName}")
+            click.echo(f"Chemin VM    : {vm.summary.config.vmPathName}")
+            click.echo(f"Remarques    : {annotation}")
+            click.echo('-' * 40)
+    if not found:
+        click.echo("Aucune VM trouvée avec cette valeur dans les remarques.")
+
+if __name__ == '__main__':
+    main()
