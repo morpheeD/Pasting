@@ -4,65 +4,67 @@ import argparse
 
 def modify_vm_template_column(csv_file_path, output_file_path=None):
     """
-    Lit un fichier CSV et modifie la colonne vm_template pour remplacer
-    toutes les occurrences de 'V-' par 'V-ISIOPERATION'
-    
-    Args:
-        csv_file_path (str): Chemin vers le fichier CSV d'entrée
-        output_file_path (str): Chemin vers le fichier CSV de sortie (optionnel)
+    Lit un fichier CSV et remplace toute occurrence de V-... par V-ISIOPERATION
+    dans la colonne vm_template. Écrase l'original si output_file_path est None.
     """
     try:
-        # Lire le fichier CSV
+        # Lecture du CSV
         df = pd.read_csv(csv_file_path)
-        
-        # Vérifier si la colonne vm_template existe
+
+        # Vérification de la colonne
         if 'vm_template' not in df.columns:
-            print(f"Erreur: La colonne 'vm_template' n'existe pas dans le fichier {csv_file_path}")
-            print(f"Colonnes disponibles: {list(df.columns)}")
+            print(f"Erreur: la colonne 'vm_template' est absente dans {csv_file_path}")
+            print("Colonnes disponibles:", list(df.columns))
             return False
-        
-        # Afficher les premières lignes avant modification
-        print("Données avant modification:")
-        print(df[['vm_template']].head())
-        print()
-        
-        # Modifier la colonne vm_template
-        df['vm_template'] = df['vm_template'].astype(str).str.replace('V-', 'V-ISIOPERATION', regex=False)
-        
-        # Afficher les premières lignes après modification
-        print("Données après modification:")
-        print(df[['vm_template']].head())
-        print()
-        
-        # Définir le fichier de sortie
+
+        # Affichage avant modification
+        print("\n-- Données avant modification --")
+        print(df[['vm_template']].head(), "\n")
+
+        # Remplacement : V- suivi de n'importe quoi → V-ISIOPERATION
+        df['vm_template'] = (
+            df['vm_template']
+            .astype(str)
+            .str.replace(r'V-.*', 'V-ISIOPERATION', regex=True)
+        )
+
+        # Affichage après modification
+        print("-- Données après modification --")
+        print(df[['vm_template']].head(), "\n")
+
+        # Si aucun chemin de sortie, réutiliser celui d'entrée
         if output_file_path is None:
-            output_file_path = csv_file_path.replace('.csv', '_modified.csv')
-        
-        # Sauvegarder le fichier modifié
+            output_file_path = csv_file_path
+
+        # Écriture du résultat
         df.to_csv(output_file_path, index=False)
-        print(f"Fichier modifié sauvegardé sous: {output_file_path}")
-        
+        print(f"Fichier sauvegardé sous : {output_file_path}\n")
         return True
-        
+
     except FileNotFoundError:
-        print(f"Erreur: Le fichier {csv_file_path} n'a pas été trouvé.")
+        print(f"Erreur: le fichier {csv_file_path} n'a pas été trouvé.")
         return False
     except Exception as e:
-        print(f"Erreur lors du traitement: {str(e)}")
+        print(f"Erreur lors du traitement: {e}")
         return False
 
 def main():
-    parser = argparse.ArgumentParser(description='Modifier la colonne vm_template dans un fichier CSV')
-    parser.add_argument('csv_file', help='Chemin vers le fichier CSV à modifier')
-    parser.add_argument('-o', '--output', help='Chemin vers le fichier de sortie (optionnel)')
-    
+    parser = argparse.ArgumentParser(
+        description="Modifier la colonne vm_template dans un fichier CSV"
+    )
+    parser.add_argument(
+        'csv_file',
+        help="Chemin vers le fichier CSV à modifier"
+    )
+    parser.add_argument(
+        '-o', '--output',
+        help="(Optionnel) Chemin vers le fichier de sortie"
+    )
     args = parser.parse_args()
-    
-    # Exécuter la modification
+
     success = modify_vm_template_column(args.csv_file, args.output)
-    
     if success:
-        print("Modification terminée avec succès!")
+        print("Modification terminée avec succès !")
     else:
         print("Échec de la modification.")
         sys.exit(1)
