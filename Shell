@@ -1,0 +1,14 @@
+awk '
+/^[[:space:]]*(resource|data|module|variable|output)[[:space:]].*"clone"/ {
+    in_block = 1
+    brace_count = 0
+}
+in_block {
+    if (/{/) brace_count++
+    if (/}/) brace_count--
+    print "# " $0
+    if (brace_count == 0) in_block = 0
+    next
+}
+{print}
+' votre_fichier.tf > temp_file && mv temp_file votre_fichier.tf
