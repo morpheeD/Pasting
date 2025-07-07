@@ -1,0 +1,84 @@
+import pandas as pd
+import json
+import argparse
+from pathlib import Path
+
+def load_csv(path: Path, sep: str = ";") -> pd.DataFrame:
+    return pd.read_csv(path, sep=sep, dtype=str)
+
+def load_json(path: Path) -> pd.DataFrame:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return pd.DataFrame(data).astype(str)
+
+def sync(
+    df_csv: pd.DataFrame,
+    df_json: pd.DataFrame,
+    keys: list[str]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # colonnes à garder intactes
+    all_csv_cols = list(df_csv.columns)
+    # colonnes qui seront comparées : toutes celles du CSV, sauf les clés
+    compare_cols = [c for c in all_csv_cols if c not in keys]
+    # merge pour juxtaposer _json
+    merged = df_csv.merge(
+        df_json[keys + compare_cols],
+        on=keys,
+        how="left",
+        suffixes=("", "_json")
+    )
+    # préparer un rapport des changements
+    changes = []
+
+    # pour chaque colonne à comparer
+    for col in compare_cols:
+        col_json = f"{col}_json"
+        # détecter où JSON propose une valeur différente et non vide
+        mask = merged[col_json].notna() & (merged[col] != merged[col_json])
+        # enregistrer chaque modification
+        for idx in merged[mask].index:
+            changes.append({
+                **{k: merged.at[idx, k] for k in keys},
+                "column": col,
+                "old": merged.at[idx, col],
+                "new": merged.at[idx, col_json]
+            })
+        # appliquer la mise à jour
+        merged[col] = merged[col_json].combine_first(merged[col])
+        merged.drop(columns=[col_json], inplace=True)
+
+    df_corrected = merged[all_csv_cols]
+    df_report = pd.DataFrame(changes)
+    return df_corrected, df_report
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Synchronise toutes les colonnes du CSV avec le JSON."
+    )
+    parser.add_argument("csv",  type=Path, help="chemin vers data.csv")
+    parser.add_argument("json", type=Path, help="chemin vers data.json")
+    parser.add_argument(
+        "--keys", nargs="+", default=["vm_name"],
+        help="colonne(s) clé(s) (défaut: vm_name)"
+    )
+    parser.add_argument(
+        "--out", type=Path, default=Path("corrected.csv"),
+        help="CSV de sortie corrigé"
+    )
+    parser.add_argument(
+        "--report", type=Path, default=Path("changes_report.csv"),
+        help="CSV de rapport des modifications"
+    )
+    args = parser.parse_args()
+
+    df_csv  = load_csv(args.csv)
+    df_json = load_json(args.json)
+    df_corr, df_rep = sync(df_csv, df_json, args.keys)
+
+    df_corr.to_csv(args.out, sep=";", index=False, encoding="utf-8")
+    df_rep.to_csv(args.report, index=False, encoding="utf-8")
+    print(f"✅ corrigé: {args.out}")
+    print(f"✅ rapport:  {args.report}")
+
+if __name__ == "__main__":
+    main()
