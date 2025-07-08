@@ -20,23 +20,12 @@ def sync(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Synchronise les données entre le CSV et le JSON.
-
-    Args:
-        df_csv: DataFrame du fichier CSV
-        df_json: DataFrame du fichier JSON
-        keys: Liste des colonnes clés pour la synchronisation
-
-    Returns:
-        Tuple contenant:
-        - DataFrame corrigé
-        - DataFrame rapport des changements
+    Met à jour les valeurs du CSV avec celles du JSON quand elles diffèrent.
     """
-    # colonnes à garder intactes
-    all_csv_cols = list(df_csv.columns)
-    # colonnes qui seront comparées : toutes celles du CSV, sauf les clés
-    compare_cols = [c for c in all_csv_cols if c not in keys]
+    # Colonnes à comparer (toutes sauf les clés)
+    compare_cols = [c for c in df_csv.columns if c not in keys]
 
-    # merge pour juxtaposer _json
+    # Fusion des données
     merged = df_csv.merge(
         df_json[keys + compare_cols],
         on=keys,
@@ -44,46 +33,57 @@ def sync(
         suffixes=("", "_json")
     )
 
-    # préparer un rapport des changements
+    # Préparation du rapport des changements
     changes = []
 
-    # pour chaque colonne à comparer
+    # Comparaison et mise à jour
     for col in compare_cols:
         col_json = f"{col}_json"
-        # détecter où JSON propose une valeur différente et non vide
-        mask = merged[col_json].notna() & (merged[col] != merged[col_json])
-        # enregistrer chaque modification
+        # Trouver les lignes où JSON a une valeur différente et non vide
+        mask = (merged[col_json].notna()) & (merged[col] != merged[col_json])
+
+        # Enregistrer les changements
         for idx in merged[mask].index:
-            changes.append({
-                **{k: merged.at[idx, k] for k in keys},
-                "column": col,
-                "old": merged.at[idx, col],
-                "new": merged.at[idx, col_json]
-            })
-        # appliquer la mise à jour
+            change = {**{k: merged.at[idx, k] for k in keys},
+                      "column": col,
+                      "old": merged.at[idx, col],
+                      "new": merged.at[idx, col_json]}
+            changes.append(change)
+
+        # Mettre à jour les valeurs du CSV avec celles du JSON
         merged[col] = merged[col_json].combine_first(merged[col])
         merged.drop(columns=[col_json], inplace=True)
 
-    df_corrected = merged[all_csv_cols]
+    # Créer le DataFrame de rapport
     df_report = pd.DataFrame(changes)
+
+    # Conserver l'ordre original des colonnes
+    df_corrected = merged[df_csv.columns]
+
     return df_corrected, df_report
 
 @click.command()
-@click.argument('csv', type=click.Path(exists=True, path_type=Path))
-@click.argument('json', type=click.Path(exists=True, path_type=Path))
+@click.option('--csv', type=click.Path(exists=True, path_type=Path), required=True,
+              help='Chemin vers le fichier CSV à mettre à jour')
+@click.option('--json', type=click.Path(exists=True, path_type=Path), required=True,
+              help='Chemin vers le fichier JSON contenant les mises à jour')
 @click.option('--keys', multiple=True, default=['vm_name'],
-              help='Colonne(s) clé(s) pour la synchronisation (défaut: vm_name)')
+              help='Colonnes clés pour la synchronisation (par défaut: vm_name)')
 @click.option('--out', type=click.Path(path_type=Path), default=Path('corrected.csv'),
-              help='Chemin du fichier CSV de sortie corrigé (défaut: corrected.csv)')
+              help='Fichier CSV de sortie corrigé (défaut: corrected.csv)')
 @click.option('--report', type=click.Path(path_type=Path), default=Path('changes_report.csv'),
-              help='Chemin du fichier CSV de rapport des modifications (défaut: changes_report.csv)')
+              help='Fichier CSV de rapport des modifications (défaut: changes_report.csv)')
 def main(csv, json, keys, out, report):
-    """Synchronise toutes les colonnes du CSV avec le JSON."""
+    """Synchronise un fichier CSV avec les données d'un fichier JSON."""
     try:
+        click.echo("Chargement des fichiers...")
         df_csv = load_csv(csv)
         df_json = load_json(json)
+
+        click.echo("Synchronisation en cours...")
         df_corr, df_rep = sync(df_csv, df_json, list(keys))
 
+        click.echo("Sauvegarde des résultats...")
         df_corr.to_csv(out, sep=";", index=False, encoding="utf-8")
         df_rep.to_csv(report, index=False, encoding="utf-8")
 
