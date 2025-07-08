@@ -15,73 +15,97 @@ def parse_terraform_state(state_path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 def extract_resources_from_state(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extrait les ressources d'un state Terraform avec leur structure complète."""
-    resources = []
+    """
+    Extrait les ressources d'un state Terraform au format v3 ou v4 (values.root_module + child_modules).
+    Chaque ressource devient un dict plat avec ses attributs et métadonnées (id, type, name, etc.).
+    """
+    resources: List[Dict[str, Any]] = []
 
-    if 'resources' not in state:
-        return resources
+    def walk_module(module: Dict[str, Any], module_addr: str = ""):
+        # resources dans root_module ou child_modules
+        for res in module.get("resources", []):
+            # nouvelle structure v4 -> "values", ancienne v3 -> "instances"[0]["attributes"]
+            if "values" in res:
+                attrs = res["values"]
+                deps  = res.get("depends_on", [])
+            else:
+                inst  = res.get("instances", [{}])[0]
+                attrs = inst.get("attributes", {})
+                deps  = inst.get("dependencies", [])
+            entry = {
+                "address" : res.get("address", ""),
+                "id"       : attrs.get("id", "") or res.get("id", ""),
+                "type"     : res.get("type", ""),
+                "name"     : res.get("name", ""),
+                "module"   : module_addr,
+                "provider" : res.get("provider_name", res.get("provider", "")),
+                "mode"     : res.get("mode", ""),
+                **attrs
+            }
+            if deps:
+                entry["dependencies"] = ",".join(deps)
+            resources.append(entry)
 
-    for resource in state['resources']:
-        if not resource.get('instances'):
-            continue
+        # descendre dans les modules enfants (v4)
+        for child in module.get("child_modules", []):
+            child_addr = child.get("address", module_addr)
+            walk_module(child, child_addr)
 
-        # Prendre la première instance (la plus courante)
-        instance = resource['instances'][0]
-
-        # Construire l'objet de ressource complet
-        resource_data = {
-            'id': resource.get('id', ''),
-            'type': resource.get('type', ''),
-            'name': resource.get('name', ''),
-            'module': resource.get('module', ''),
-            'provider': resource.get('provider', ''),
-            'mode': resource.get('mode', ''),
-            **instance.get('attributes', {})
-        }
-
-        # Ajouter les dépendances si elles existent
-        if 'dependencies' in instance:
-            resource_data['dependencies'] = ','.join(instance['dependencies'])
-
-        resources.append(resource_data)
+    # choix du schéma : v4 "values" vs v3 "resources"
+    if "values" in state:
+        root = state["values"].get("root_module", {})
+        walk_module(root, module_addr="")
+    else:
+        # ancien schéma terraform <= 0.12
+        dummy = {"resources": state.get("resources", [])}
+        walk_module(dummy, module_addr="")
 
     return resources
 
 def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
-    """Construit un DataFrame à partir du state Terraform."""
-    state = parse_terraform_state(state_path)
+    """Construit un DataFrame à partir du state Terraform adapté au nouveau schéma JSON."""
+    state     = parse_terraform_state(state_path)
     resources = extract_resources_from_state(state)
 
     if not resources:
         return pd.DataFrame(columns=csv_header)
 
-    # Créer le DataFrame avec toutes les colonnes disponibles
     df = pd.DataFrame(resources)
 
-    # Filtrer pour ne garder que les colonnes de l'en-tête CSV
-    available_cols = [col for col in csv_header if col in df.columns]
-    df = df[available_cols]
+    # ne garder que les colonnes de l'en-tête CSV
+    cols_ok = [c for c in csv_header if c in df.columns]
+    df      = df[cols_ok]
 
-    # Ajouter les colonnes manquantes avec des valeurs vides
-    for col in csv_header:
-        if col not in df.columns:
-            df[col] = ''
+    # ajouter les colonnes manquantes
+    for c in csv_header:
+        if c not in df.columns:
+            df[c] = ""
 
-    # Réorganiser selon l'ordre de l'en-tête CSV
-    df = df[csv_header]
-
-    return df
+    # réordonner selon l'en-tête
+    return df[csv_header]
 
 @click.command()
-@click.option('--csv-header', type=click.Path(exists=True, dir_okay=False, path_type=Path),
-              required=True, help='Fichier CSV dont on veut conserver l\'en-tête')
-@click.option('--terraform-state', type=click.Path(exists=True, dir_okay=False, path_type=Path),
-              required=True, help='Fichier de state Terraform au format JSON')
-@click.option('--output', type=click.Path(dir_okay=False, path_type=Path),
-              default=Path('terraform_resources.csv'), help='Fichier CSV de sortie')
+@click.option(
+    '--csv-header',
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Fichier CSV dont on veut conserver l'en-tête"
+)
+@click.option(
+    '--terraform-state',
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help='Fichier de state Terraform au format JSON (v3 ou v4)'
+)
+@click.option(
+    '--output',
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=Path('terraform_resources.csv'),
+    help='Fichier CSV de sortie'
+)
 @click.option('--sep', default=';', help='Séparateur CSV')
 def main(csv_header: Path, terraform_state: Path, output: Path, sep: str):
-    """Génère un CSV à partir d'un state Terraform en conservant l'en-tête du CSV."""
+    """Génère un CSV à partir d'un state Terraform v4 (values.root_module) en conservant l'en-tête du CSV."""
     try:
         click.echo("Chargement de l'en-tête du CSV...")
         header = load_csv_header(csv_header, sep)
@@ -97,7 +121,10 @@ def main(csv_header: Path, terraform_state: Path, output: Path, sep: str):
         click.echo(f"Colonnes incluses: {', '.join(header)}")
 
     except json.JSONDecodeError:
-        click.echo("❌ Erreur: Le fichier de state Terraform n'est pas un JSON valide", err=True)
+        click.echo(
+            "❌ Erreur: Le fichier de state Terraform n'est pas un JSON valide",
+            err=True
+        )
         raise click.Abort()
     except Exception as e:
         click.echo(f"❌ Erreur: {str(e)}", err=True)
