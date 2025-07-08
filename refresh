@@ -2,7 +2,7 @@ import pandas as pd
 import json
 from pathlib import Path
 import click
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 def load_csv_header(path: Path, sep: str = ";") -> List[str]:
     """Charge uniquement l'en-tête d'un fichier CSV."""
@@ -10,78 +10,115 @@ def load_csv_header(path: Path, sep: str = ";") -> List[str]:
         return f.readline().strip().split(sep)
 
 def parse_terraform_state(state_path: Path) -> Dict[str, Any]:
-    """Parse correctement un fichier de state Terraform JSON."""
+    """Parse un fichier de state Terraform JSON."""
     with open(state_path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def extract_resources_from_state(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    Extrait les ressources d'un state Terraform au format v3 ou v4 (values.root_module + child_modules).
-    Chaque ressource devient un dict plat avec ses attributs et métadonnées (id, type, name, etc.).
-    """
+def extract_vm_entry(
+    res: Dict[str, Any],
+    module_addr: str,
+    csv_header: List[str]
+) -> Optional[Dict[str, Any]]:
+    """Si c'est une VM, mappe ses attributs et tags vers vos colonnes CSV."""
+    vm_types = {
+        "vsphere_virtual_machine",
+        "azurerm_virtual_machine",
+        "aws_instance",
+        "google_compute_instance"
+    }
+    if res.get("type") not in vm_types:
+        return None
+
+    # Terraform v4 -> "values", v3 -> "instances"[0]["attributes"]
+    attrs = res.get("values") or res.get("instances", [{}])[0].get("attributes", {})
+
+    entry: Dict[str, Any] = {
+        "vm_name":           attrs.get("name", ""),
+        "num_cpus":          attrs.get("num_cpus", attrs.get("cpu_count", "")),
+        "memory":            attrs.get("memory_mb", attrs.get("memory", "")),
+        "vm_dns":            (attrs.get("dns_servers") or [""])[0],
+        "vm_domain":         attrs.get("domain", ""),
+        "site":              attrs.get("location", attrs.get("datacenter", "")),
+        "network":           (attrs.get("network_interface") or [{}])[0].get("network_id", ""),
+        "vm_ressource_pool": attrs.get("resource_pool_id", ""),
+        "vm_template":       attrs.get("template_uuid", ""),
+        # modules & provider info (optionnel)
+        "workload":          "",  # à remplir via tags
+        "env":               "",  # idem
+        "usage":             "",
+        "appli":             "",
+        "path_folder":       ""
+    }
+
+    # disques (jusqu’à 3)
+    disks = attrs.get("disks", []) or attrs.get("storage_data", [])
+    for i in range(3):
+        taille = disks[i].get("size", "") if i < len(disks) else ""
+        nom    = disks[i].get("label", "") or disks[i].get("name", "") if i < len(disks) else ""
+        entry[f"disk_{i+1}_taille"] = taille
+        entry[f"disk_{i+1}_nom"]    = nom
+
+    # tags Terraform
+    tags = attrs.get("tags", {})
+    # mappez certains champs
+    for field in ["workload", "env", "usage", "appli", "path_folder"]:
+        entry[field] = entry[field] or tags.get(field, "")
+
+    # tous les tags restants (suffixe _tag)
+    for tag_key, tag_val in tags.items():
+        col = f"{tag_key}_tag"
+        entry[col] = tag_val
+
+    # s'assurer que toutes les colonnes existent
+    for col in csv_header:
+        entry.setdefault(col, "")
+
+    return entry
+
+def extract_resources_from_state(
+    state: Dict[str, Any],
+    csv_header: List[str]
+) -> List[Dict[str, Any]]:
+    """Parcours récursif du state pour extraire toutes les VM."""
     resources: List[Dict[str, Any]] = []
 
-    def walk_module(module: Dict[str, Any], module_addr: str = ""):
-        # resources dans root_module ou child_modules
+    def walk_module(module: Dict[str, Any], addr: str = ""):
+        # traiter les resources du module
         for res in module.get("resources", []):
-            # nouvelle structure v4 -> "values", ancienne v3 -> "instances"[0]["attributes"]
-            if "values" in res:
-                attrs = res["values"]
-                deps  = res.get("depends_on", [])
-            else:
-                inst  = res.get("instances", [{}])[0]
-                attrs = inst.get("attributes", {})
-                deps  = inst.get("dependencies", [])
-            entry = {
-                "address" : res.get("address", ""),
-                "id"       : attrs.get("id", "") or res.get("id", ""),
-                "type"     : res.get("type", ""),
-                "name"     : res.get("name", ""),
-                "module"   : module_addr,
-                "provider" : res.get("provider_name", res.get("provider", "")),
-                "mode"     : res.get("mode", ""),
-                **attrs
-            }
-            if deps:
-                entry["dependencies"] = ",".join(deps)
-            resources.append(entry)
+            vm = extract_vm_entry(res, addr, csv_header)
+            if vm:
+                resources.append(vm)
 
         # descendre dans les modules enfants (v4)
         for child in module.get("child_modules", []):
-            child_addr = child.get("address", module_addr)
-            walk_module(child, child_addr)
+            walk_module(child, child.get("address", addr))
 
-    # choix du schéma : v4 "values" vs v3 "resources"
+    # schéma v4
     if "values" in state:
         root = state["values"].get("root_module", {})
-        walk_module(root, module_addr="")
+        walk_module(root, "")
     else:
-        # ancien schéma terraform <= 0.12
+        # ancien schéma <= 0.12
         dummy = {"resources": state.get("resources", [])}
-        walk_module(dummy, module_addr="")
+        walk_module(dummy, "")
 
     return resources
 
 def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
-    """Construit un DataFrame à partir du state Terraform adapté au nouveau schéma JSON."""
+    """Construit un DataFrame filtré sur votre entête CSV."""
     state     = parse_terraform_state(state_path)
-    resources = extract_resources_from_state(state)
+    resources = extract_resources_from_state(state, csv_header)
 
     if not resources:
         return pd.DataFrame(columns=csv_header)
 
     df = pd.DataFrame(resources)
-
-    # ne garder que les colonnes de l'en-tête CSV
-    cols_ok = [c for c in csv_header if c in df.columns]
-    df      = df[cols_ok]
-
+    # ne garder que les colonnes de l'en-tête
+    df = df[[c for c in csv_header if c in df.columns]]
     # ajouter les colonnes manquantes
     for c in csv_header:
         if c not in df.columns:
             df[c] = ""
-
-    # réordonner selon l'en-tête
     return df[csv_header]
 
 @click.command()
@@ -89,45 +126,39 @@ def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
     '--csv-header',
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     required=True,
-    help="Fichier CSV dont on veut conserver l'en-tête"
+    help="Chemin vers le CSV dont on conserve l'en-tête"
 )
 @click.option(
     '--terraform-state',
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
     required=True,
-    help='Fichier de state Terraform au format JSON (v3 ou v4)'
+    help='Fichier de state Terraform JSON (v3 ou v4)'
 )
 @click.option(
     '--output',
     type=click.Path(dir_okay=False, path_type=Path),
-    default=Path('terraform_resources.csv'),
-    help='Fichier CSV de sortie'
+    default=Path('terraform_vms.csv'),
+    help='CSV de sortie'
 )
 @click.option('--sep', default=';', help='Séparateur CSV')
 def main(csv_header: Path, terraform_state: Path, output: Path, sep: str):
-    """Génère un CSV à partir d'un state Terraform v4 (values.root_module) en conservant l'en-tête du CSV."""
+    """Génère un CSV listant toutes les VMs et leurs champs selon votre entête."""
     try:
-        click.echo("Chargement de l'en-tête du CSV...")
+        click.echo("Chargement de l'en-tête CSV…")
         header = load_csv_header(csv_header, sep)
 
-        click.echo("Traitement du state Terraform...")
+        click.echo("Extraction des VMs depuis le state Terraform…")
         df = build_dataframe(terraform_state, header)
 
-        click.echo(f"Écriture du fichier de sortie {output}...")
+        click.echo(f"Écriture du CSV de sortie : {output}")
         df.to_csv(output, sep=sep, index=False, encoding='utf-8')
 
-        click.echo(f"✅ Fichier généré avec succès: {output}")
-        click.echo(f"Nombre de ressources traitées: {len(df)}")
-        click.echo(f"Colonnes incluses: {', '.join(header)}")
-
+        click.echo(f"✅ Fini ! {len(df)} VMs exportées.")
     except json.JSONDecodeError:
-        click.echo(
-            "❌ Erreur: Le fichier de state Terraform n'est pas un JSON valide",
-            err=True
-        )
+        click.echo("❌ State Terraform non valide (JSON).", err=True)
         raise click.Abort()
     except Exception as e:
-        click.echo(f"❌ Erreur: {str(e)}", err=True)
+        click.echo(f"❌ Erreur inattendue : {e}", err=True)
         raise click.Abort()
 
 if __name__ == "__main__":
