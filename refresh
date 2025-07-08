@@ -9,67 +9,77 @@ def load_csv_header(path: Path, sep: str = ";") -> List[str]:
     with open(path, 'r', encoding='utf-8') as f:
         return f.readline().strip().split(sep)
 
-def extract_terraform_resources(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extrait les ressources d'un state Terraform JSON."""
+def parse_terraform_state(state_path: Path) -> Dict[str, Any]:
+    """Parse correctement un fichier de state Terraform JSON."""
+    with open(state_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def extract_resources_from_state(state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extrait les ressources d'un state Terraform avec leur structure complète."""
     resources = []
 
-    # Vérifier la structure du state Terraform
     if 'resources' not in state:
         return resources
 
     for resource in state['resources']:
-        if not resource['instances']:
+        if not resource.get('instances'):
             continue
 
-        # Extraire les attributs de la première instance
-        attrs = resource['instances'][0]['attributes']
+        # Prendre la première instance (la plus courante)
+        instance = resource['instances'][0]
 
-        # Construire l'objet de ressource
+        # Construire l'objet de ressource complet
         resource_data = {
-            'type': resource['type'],
-            'name': resource['name'],
+            'id': resource.get('id', ''),
+            'type': resource.get('type', ''),
+            'name': resource.get('name', ''),
             'module': resource.get('module', ''),
-            **attrs
+            'provider': resource.get('provider', ''),
+            'mode': resource.get('mode', ''),
+            **instance.get('attributes', {})
         }
+
+        # Ajouter les dépendances si elles existent
+        if 'dependencies' in instance:
+            resource_data['dependencies'] = ','.join(instance['dependencies'])
+
         resources.append(resource_data)
 
     return resources
 
-def build_dataframe_from_terraform(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
-    """Construit un DataFrame à partir d'un state Terraform en utilisant l'en-tête du CSV."""
-    with open(state_path, 'r', encoding='utf-8') as f:
-        state = json.load(f)
-
-    resources = extract_terraform_resources(state)
+def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
+    """Construit un DataFrame à partir du state Terraform."""
+    state = parse_terraform_state(state_path)
+    resources = extract_resources_from_state(state)
 
     if not resources:
         return pd.DataFrame(columns=csv_header)
 
-    # Créer le DataFrame avec les ressources
+    # Créer le DataFrame avec toutes les colonnes disponibles
     df = pd.DataFrame(resources)
 
-    # Filtrer et réorganiser selon l'en-tête CSV
+    # Filtrer pour ne garder que les colonnes de l'en-tête CSV
     available_cols = [col for col in csv_header if col in df.columns]
     df = df[available_cols]
 
-    # Ajouter les colonnes manquantes
+    # Ajouter les colonnes manquantes avec des valeurs vides
     for col in csv_header:
         if col not in df.columns:
             df[col] = ''
 
-    # Réorganiser selon l'ordre du CSV original
+    # Réorganiser selon l'ordre de l'en-tête CSV
     df = df[csv_header]
 
     return df
 
 @click.command()
-@click.option('--csv-header', type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True,
-              help='Fichier CSV dont on veut conserver l\'en-tête')
-@click.option('--terraform-state', type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True,
-              help='Fichier de state Terraform au format JSON')
-@click.option('--output', type=click.Path(dir_okay=False, path_type=Path), default=Path('terraform_resources.csv'),
-              help='Fichier CSV de sortie (défaut: terraform_resources.csv)')
-@click.option('--sep', default=';', help='Séparateur CSV (défaut: ;)')
+@click.option('--csv-header', type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              required=True, help='Fichier CSV dont on veut conserver l\'en-tête')
+@click.option('--terraform-state', type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              required=True, help='Fichier de state Terraform au format JSON')
+@click.option('--output', type=click.Path(dir_okay=False, path_type=Path),
+              default=Path('terraform_resources.csv'), help='Fichier CSV de sortie')
+@click.option('--sep', default=';', help='Séparateur CSV')
 def main(csv_header: Path, terraform_state: Path, output: Path, sep: str):
     """Génère un CSV à partir d'un state Terraform en conservant l'en-tête du CSV."""
     try:
@@ -77,7 +87,7 @@ def main(csv_header: Path, terraform_state: Path, output: Path, sep: str):
         header = load_csv_header(csv_header, sep)
 
         click.echo("Traitement du state Terraform...")
-        df = build_dataframe_from_terraform(terraform_state, header)
+        df = build_dataframe(terraform_state, header)
 
         click.echo(f"Écriture du fichier de sortie {output}...")
         df.to_csv(output, sep=sep, index=False, encoding='utf-8')
