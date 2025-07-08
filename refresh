@@ -1,12 +1,14 @@
 import pandas as pd
 import json
-import argparse
 from pathlib import Path
+import click
 
 def load_csv(path: Path, sep: str = ";") -> pd.DataFrame:
+    """Charge un fichier CSV en DataFrame."""
     return pd.read_csv(path, sep=sep, dtype=str)
 
 def load_json(path: Path) -> pd.DataFrame:
+    """Charge un fichier JSON en DataFrame."""
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return pd.DataFrame(data).astype(str)
@@ -16,10 +18,24 @@ def sync(
     df_json: pd.DataFrame,
     keys: list[str]
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Synchronise les données entre le CSV et le JSON.
+
+    Args:
+        df_csv: DataFrame du fichier CSV
+        df_json: DataFrame du fichier JSON
+        keys: Liste des colonnes clés pour la synchronisation
+
+    Returns:
+        Tuple contenant:
+        - DataFrame corrigé
+        - DataFrame rapport des changements
+    """
     # colonnes à garder intactes
     all_csv_cols = list(df_csv.columns)
     # colonnes qui seront comparées : toutes celles du CSV, sauf les clés
     compare_cols = [c for c in all_csv_cols if c not in keys]
+
     # merge pour juxtaposer _json
     merged = df_csv.merge(
         df_json[keys + compare_cols],
@@ -27,6 +43,7 @@ def sync(
         how="left",
         suffixes=("", "_json")
     )
+
     # préparer un rapport des changements
     changes = []
 
@@ -51,34 +68,30 @@ def sync(
     df_report = pd.DataFrame(changes)
     return df_corrected, df_report
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Synchronise toutes les colonnes du CSV avec le JSON."
-    )
-    parser.add_argument("csv",  type=Path, help="chemin vers data.csv")
-    parser.add_argument("json", type=Path, help="chemin vers data.json")
-    parser.add_argument(
-        "--keys", nargs="+", default=["vm_name"],
-        help="colonne(s) clé(s) (défaut: vm_name)"
-    )
-    parser.add_argument(
-        "--out", type=Path, default=Path("corrected.csv"),
-        help="CSV de sortie corrigé"
-    )
-    parser.add_argument(
-        "--report", type=Path, default=Path("changes_report.csv"),
-        help="CSV de rapport des modifications"
-    )
-    args = parser.parse_args()
+@click.command()
+@click.argument('csv', type=click.Path(exists=True, path_type=Path))
+@click.argument('json', type=click.Path(exists=True, path_type=Path))
+@click.option('--keys', multiple=True, default=['vm_name'],
+              help='Colonne(s) clé(s) pour la synchronisation (défaut: vm_name)')
+@click.option('--out', type=click.Path(path_type=Path), default=Path('corrected.csv'),
+              help='Chemin du fichier CSV de sortie corrigé (défaut: corrected.csv)')
+@click.option('--report', type=click.Path(path_type=Path), default=Path('changes_report.csv'),
+              help='Chemin du fichier CSV de rapport des modifications (défaut: changes_report.csv)')
+def main(csv, json, keys, out, report):
+    """Synchronise toutes les colonnes du CSV avec le JSON."""
+    try:
+        df_csv = load_csv(csv)
+        df_json = load_json(json)
+        df_corr, df_rep = sync(df_csv, df_json, list(keys))
 
-    df_csv  = load_csv(args.csv)
-    df_json = load_json(args.json)
-    df_corr, df_rep = sync(df_csv, df_json, args.keys)
+        df_corr.to_csv(out, sep=";", index=False, encoding="utf-8")
+        df_rep.to_csv(report, index=False, encoding="utf-8")
 
-    df_corr.to_csv(args.out, sep=";", index=False, encoding="utf-8")
-    df_rep.to_csv(args.report, index=False, encoding="utf-8")
-    print(f"✅ corrigé: {args.out}")
-    print(f"✅ rapport:  {args.report}")
+        click.echo(f"✅ Fichier corrigé enregistré: {out}")
+        click.echo(f"✅ Rapport des modifications enregistré: {report}")
+    except Exception as e:
+        click.echo(f"❌ Erreur: {str(e)}", err=True)
+        raise click.Abort()
 
 if __name__ == "__main__":
     main()
