@@ -11,7 +11,7 @@ import click
 def compare_csv(original, updated, output):
     """
     Compare deux fichiers CSV (délimiteur ;) et génère un nouveau fichier avec les règles suivantes :
-    - Pour toutes les colonnes sauf num_cpu, memory, disk_1_taille, disk_2_taille, disk_3_taille,
+    - Pour toutes les colonnes sauf num_cpus, memory, disk_1_taille, disk_2_taille, disk_3_taille,
       prend les valeurs du fichier original
     - Pour les colonnes en exception, prend les valeurs du fichier mis à jour
     """
@@ -24,22 +24,27 @@ def compare_csv(original, updated, output):
         if len(original_df) != len(updated_df):
             raise ValueError("Les fichiers CSV n'ont pas le même nombre de lignes")
 
-        # Colonnes à prendre depuis le fichier mis à jour
-        update_columns = ['num_cpu', 'memory', 'disk_1_taille', 'disk_2_taille', 'disk_3_taille']
+        # Colonnes à prendre depuis le fichier mis à jour (noms exacts du fichier)
+        update_columns = ['num_cpus', 'memory', 'disk_1_taille', 'disk_2_taille', 'disk_3_taille']
+
+        # Vérifier que les colonnes existent dans les deux fichiers
+        missing_in_original = [col for col in update_columns if col not in original_df.columns]
+        missing_in_updated = [col for col in update_columns if col not in updated_df.columns]
+
+        if missing_in_original:
+            raise ValueError(f"Les colonnes suivantes sont manquantes dans le fichier original: {', '.join(missing_in_original)}")
+
+        if missing_in_updated:
+            click.echo(f"Attention: les colonnes suivantes sont manquantes dans le fichier mis à jour et seront ignorées: {', '.join(missing_in_updated)}")
+            # Filtrer pour ne garder que les colonnes existantes
+            update_columns = [col for col in update_columns if col not in missing_in_updated]
 
         # Créer un nouveau DataFrame
         result_df = original_df.copy()
 
         # Mettre à jour les colonnes spécifiées
-        missing_columns = []
         for col in update_columns:
-            if col in updated_df.columns:
-                result_df[col] = updated_df[col]
-            else:
-                missing_columns.append(col)
-
-        if missing_columns:
-            click.echo(f"Attention: les colonnes suivantes n'existent pas dans le fichier mis à jour: {', '.join(missing_columns)}")
+            result_df[col] = updated_df[col]
 
         # Sauvegarder le résultat avec le délimiteur ;
         result_df.to_csv(output, index=False, sep=';')
