@@ -9,19 +9,15 @@ def load_csv_header(path: Path, sep: str = ";") -> List[str]:
     with open(path, 'r', encoding='utf-8') as f:
         return f.readline().strip().split(sep)
 
-def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extrait les VMs et les tags du state Terraform."""
-    vms = []
+def extract_tags(state: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """Extrait tous les tags du state Terraform."""
     tags = {}
-
-    # D'abord extraire toutes les ressources de type tag
     for resource in state.get('resources', []):
         if resource.get('type') == 'vsphere_tag':
             if resource.get('instances'):
                 tag_attrs = resource['instances'][0]['attributes']
                 tag_id = tag_attrs.get('id')
                 if tag_id:
-                    # Récupérer le nom de la catégorie à partir de l'ID de catégorie
                     category_id = tag_attrs.get('category_id', '')
                     category_name = category_id.split(':')[-2] if category_id else ''
                     tags[tag_id] = {
@@ -29,8 +25,12 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                         'category': category_name,
                         'description': tag_attrs.get('description', '')
                     }
+    return tags
 
-    # Ensuite extraire les VMs et leurs associations de tags
+def extract_vms_with_tags(state: Dict[str, Any], tags: Dict[str, Dict[str, str]]) -> List[Dict[str, Any]]:
+    """Extrait les VMs avec leurs tags associés."""
+    vms = []
+
     for resource in state.get('resources', []):
         if resource.get('type') == 'vsphere_virtual_machine':
             if not resource.get('instances'):
@@ -39,37 +39,57 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             attrs = resource['instances'][0]['attributes']
             vm_tags = {}
 
+            # Initialiser les champs de tags
+            tag_fields = {
+                'workload': '',
+                'env': '',
+                'env_tag': '',
+                'confidentiality_tag': '',
+                'integrity_tag': '',
+                'availability_tag': '',
+                'backup_policy_tag': '',
+                'managedby_tag': '',
+                'business_service_tag': '',
+                'technical_service_tag': '',
+                'component_tag': '',
+                'security_zone_tag': '',
+                'owner_tag': ''
+            }
+
             # Extraire les associations de tags si elles existent
             if 'tags' in attrs:
                 for tag_id in attrs['tags']:
                     if tag_id in tags:
                         tag = tags[tag_id]
-                        # Mapper les tags aux colonnes spécifiques
-                        if tag['category'] == 'workload':
-                            vm_tags['workload'] = tag['name']
-                        elif tag['category'] == 'env':
-                            vm_tags['env'] = tag['name']
-                            vm_tags['env_tag'] = tag['name']
-                        elif tag['category'] == 'BackupPolicy':
-                            vm_tags['backup_policy_tag'] = tag['name']
-                        elif tag['category'] == 'confidentiality':
-                            vm_tags['confidentiality_tag'] = tag['name']
-                        elif tag['category'] == 'integrity':
-                            vm_tags['integrity_tag'] = tag['name']
-                        elif tag['category'] == 'availability':
-                            vm_tags['availability_tag'] = tag['name']
-                        elif tag['category'] == 'managedby':
-                            vm_tags['managedby_tag'] = tag['name']
-                        elif tag['category'] == 'business_service':
-                            vm_tags['business_service_tag'] = tag['name']
-                        elif tag['category'] == 'technical_service':
-                            vm_tags['technical_service_tag'] = tag['name']
-                        elif tag['category'] == 'component':
-                            vm_tags['component_tag'] = tag['name']
-                        elif tag['category'] == 'security_zone':
-                            vm_tags['security_zone_tag'] = tag['name']
-                        elif tag['category'] == 'owner':
-                            vm_tags['owner_tag'] = tag['name']
+                        category = tag['category']
+                        name = tag['name']
+
+                        # Mapper les tags aux champs spécifiques
+                        if category == 'workload':
+                            tag_fields['workload'] = name
+                        elif category == 'env':
+                            tag_fields['env'] = name
+                            tag_fields['env_tag'] = name
+                        elif category == 'confidentiality':
+                            tag_fields['confidentiality_tag'] = name
+                        elif category == 'integrity':
+                            tag_fields['integrity_tag'] = name
+                        elif category == 'availability':
+                            tag_fields['availability_tag'] = name
+                        elif category == 'BackupPolicy':
+                            tag_fields['backup_policy_tag'] = name
+                        elif category == 'managedby':
+                            tag_fields['managedby_tag'] = name
+                        elif category == 'business_service':
+                            tag_fields['business_service_tag'] = name
+                        elif category == 'technical_service':
+                            tag_fields['technical_service_tag'] = name
+                        elif category == 'component':
+                            tag_fields['component_tag'] = name
+                        elif category == 'security_zone':
+                            tag_fields['security_zone_tag'] = name
+                        elif category == 'owner':
+                            tag_fields['owner_tag'] = name
 
             # Initialisation des disques
             disk_info = {
@@ -113,30 +133,15 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             vm = {
                 'vm_name': attrs.get('name', ''),
                 'num_cpus': attrs.get('num_cpus', ''),
-                'workload': '',
-                'env': '',
                 'memory': memory_gb,
                 'vm_dns': '',
                 'vm_domain': attrs.get('domain', ''),
-                'site': '',
-                'usage': '',
-                'appli': '',
                 'network': network,
                 'path_folder': attrs.get('folder', ''),
                 'vm_ressource_pool': attrs.get('resource_pool_id', ''),
                 'vm_template': '',
                 **disk_info,
-                'confidentiality_tag': '',
-                'integrity_tag': '',
-                'availability_tag': '',
-                'backup_policy_tag': '',
-                'managedby_tag': '',
-                'business_service_tag': '',
-                'technical_service_tag': '',
-                'component_tag': '',
-                'security_zone_tag': '',
-                'owner_tag': '',
-                'env_tag': ''
+                **tag_fields  # Ajout des champs de tags
             }
 
             # Gestion du template
@@ -149,8 +154,6 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             if ip_addresses and isinstance(ip_addresses, list) and len(ip_addresses) > 0:
                 vm['vm_dns'] = ip_addresses[0]
 
-            # Appliquer les tags extraits
-            vm.update(vm_tags)
             vms.append(vm)
 
     return vms
@@ -160,7 +163,11 @@ def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
     with open(state_path, 'r', encoding='utf-8') as f:
         state = json.load(f)
 
-    vms = extract_vms_and_tags(state)
+    # D'abord extraire tous les tags
+    tags = extract_tags(state)
+
+    # Ensuite extraire les VMs avec leurs tags
+    vms = extract_vms_with_tags(state, tags)
 
     if not vms:
         return pd.DataFrame(columns=csv_header)
