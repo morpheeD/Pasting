@@ -3,23 +3,22 @@ import click
 
 @click.command()
 @click.option('--original', '--original-csv', required=True,
-              type=click.Path(exists=True), help='Fichier CSV original')
+              type=click.Path(exists=True), help='Fichier CSV original (délimiteur ;)')
 @click.option('--updated', '--updated-csv', required=True,
-              type=click.Path(exists=True), help='Fichier CSV mis à jour')
+              type=click.Path(exists=True), help='Fichier CSV mis à jour (délimiteur ;)')
 @click.option('--output', default='output.csv',
               help='Nom du fichier de sortie (par défaut: output.csv)')
 def compare_csv(original, updated, output):
     """
-    Compare deux fichiers CSV et génère un nouveau fichier avec les règles suivantes :
+    Compare deux fichiers CSV (délimiteur ;) et génère un nouveau fichier avec les règles suivantes :
     - Pour toutes les colonnes sauf num_cpu, memory, disk_1_taille, disk_2_taille, disk_3_taille,
       prend les valeurs du fichier original
     - Pour les colonnes en exception, prend les valeurs du fichier mis à jour
     """
-
     try:
-        # Charger les fichiers CSV
-        original_df = pd.read_csv(original)
-        updated_df = pd.read_csv(updated)
+        # Charger les fichiers CSV avec le délimiteur ;
+        original_df = pd.read_csv(original, delimiter=';')
+        updated_df = pd.read_csv(updated, delimiter=';')
 
         # Vérifier que les DataFrames ont les mêmes lignes
         if len(original_df) != len(updated_df):
@@ -32,15 +31,19 @@ def compare_csv(original, updated, output):
         result_df = original_df.copy()
 
         # Mettre à jour les colonnes spécifiées
+        missing_columns = []
         for col in update_columns:
             if col in updated_df.columns:
                 result_df[col] = updated_df[col]
             else:
-                click.echo(f"Attention: la colonne '{col}' n'existe pas dans le fichier mis à jour")
+                missing_columns.append(col)
 
-        # Sauvegarder le résultat
-        result_df.to_csv(output, index=False)
-        click.echo(f"Fichier de sortie généré avec succès: {output}")
+        if missing_columns:
+            click.echo(f"Attention: les colonnes suivantes n'existent pas dans le fichier mis à jour: {', '.join(missing_columns)}")
+
+        # Sauvegarder le résultat avec le délimiteur ;
+        result_df.to_csv(output, index=False, sep=';')
+        click.echo(f"Fichier de sortie généré avec succès: {output} (délimiteur ;)")
 
     except Exception as e:
         click.echo(f"Erreur: {str(e)}", err=True)
