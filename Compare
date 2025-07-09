@@ -10,44 +10,43 @@ import click
               help='Nom du fichier de sortie (par défaut: output.csv)')
 def compare_csv(original, updated, output):
     """
-    Compare deux fichiers CSV (délimiteur ;) et génère un nouveau fichier avec les règles suivantes :
-    - Pour toutes les colonnes sauf num_cpus, memory, disk_1_taille, disk_2_taille, disk_3_taille,
-      prend les valeurs du fichier original
-    - Pour les colonnes en exception, prend les valeurs du fichier mis à jour
+    Compare deux fichiers CSV en utilisant vm_name comme clé de jointure.
+    - Conserve les valeurs "NA" telles quelles
+    - Met à jour uniquement les colonnes spécifiées depuis le fichier mis à jour
+    - Utilise vm_name pour faire correspondre les bonnes lignes
     """
     try:
         # Charger les fichiers CSV avec le délimiteur ;
-        original_df = pd.read_csv(original, delimiter=';')
-        updated_df = pd.read_csv(updated, delimiter=';')
+        original_df = pd.read_csv(original, delimiter=';', keep_default_na=False)
+        updated_df = pd.read_csv(updated, delimiter=';', keep_default_na=False)
 
-        # Vérifier que les DataFrames ont les mêmes lignes
-        if len(original_df) != len(updated_df):
-            raise ValueError("Les fichiers CSV n'ont pas le même nombre de lignes")
-
-        # Colonnes à prendre depuis le fichier mis à jour (noms exacts du fichier)
+        # Colonnes à mettre à jour (noms exacts du fichier)
         update_columns = ['num_cpus', 'memory', 'disk_1_taille', 'disk_2_taille', 'disk_3_taille']
 
-        # Vérifier que les colonnes existent dans les deux fichiers
-        missing_in_original = [col for col in update_columns if col not in original_df.columns]
+        # Vérifier que vm_name existe dans les deux fichiers
+        if 'vm_name' not in original_df.columns or 'vm_name' not in updated_df.columns:
+            raise ValueError("La colonne 'vm_name' est manquante dans un des fichiers")
+
+        # Vérifier les colonnes à mettre à jour
         missing_in_updated = [col for col in update_columns if col not in updated_df.columns]
-
-        if missing_in_original:
-            raise ValueError(f"Les colonnes suivantes sont manquantes dans le fichier original: {', '.join(missing_in_original)}")
-
         if missing_in_updated:
             click.echo(f"Attention: les colonnes suivantes sont manquantes dans le fichier mis à jour et seront ignorées: {', '.join(missing_in_updated)}")
-            # Filtrer pour ne garder que les colonnes existantes
             update_columns = [col for col in update_columns if col not in missing_in_updated]
 
-        # Créer un nouveau DataFrame
-        result_df = original_df.copy()
-
-        # Mettre à jour les colonnes spécifiées
+        # Créer un dictionnaire de correspondance pour les colonnes à mettre à jour
+        update_dict = {}
         for col in update_columns:
-            result_df[col] = updated_df[col]
+            if col in updated_df.columns:
+                update_dict[col] = updated_df.set_index('vm_name')[col]
+
+        # Mettre à jour les valeurs dans le DataFrame original
+        for col in update_columns:
+            if col in update_dict:
+                # Utiliser vm_name comme index pour la mise à jour
+                original_df[col] = original_df['vm_name'].map(update_dict[col]).fillna(original_df[col])
 
         # Sauvegarder le résultat avec le délimiteur ;
-        result_df.to_csv(output, index=False, sep=';')
+        original_df.to_csv(output, index=False, sep=';')
         click.echo(f"Fichier de sortie généré avec succès: {output} (délimiteur ;)")
 
     except Exception as e:
