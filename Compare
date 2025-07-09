@@ -2,10 +2,13 @@ import pandas as pd
 import click
 
 @click.command()
-@click.argument('original_csv', type=click.Path(exists=True))
-@click.argument('updated_csv', type=click.Path(exists=True))
-@click.option('--output', default='output.csv', help='Nom du fichier de sortie')
-def compare_csv(original_csv, updated_csv, output):
+@click.option('--original', '--original-csv', required=True,
+              type=click.Path(exists=True), help='Fichier CSV original')
+@click.option('--updated', '--updated-csv', required=True,
+              type=click.Path(exists=True), help='Fichier CSV mis à jour')
+@click.option('--output', default='output.csv',
+              help='Nom du fichier de sortie (par défaut: output.csv)')
+def compare_csv(original, updated, output):
     """
     Compare deux fichiers CSV et génère un nouveau fichier avec les règles suivantes :
     - Pour toutes les colonnes sauf num_cpu, memory, disk_1_taille, disk_2_taille, disk_3_taille,
@@ -13,30 +16,35 @@ def compare_csv(original_csv, updated_csv, output):
     - Pour les colonnes en exception, prend les valeurs du fichier mis à jour
     """
 
-    # Charger les fichiers CSV
-    original_df = pd.read_csv(original_csv)
-    updated_df = pd.read_csv(updated_csv)
+    try:
+        # Charger les fichiers CSV
+        original_df = pd.read_csv(original)
+        updated_df = pd.read_csv(updated)
 
-    # Vérifier que les DataFrames ont les mêmes lignes
-    if len(original_df) != len(updated_df):
-        raise ValueError("Les fichiers CSV n'ont pas le même nombre de lignes")
+        # Vérifier que les DataFrames ont les mêmes lignes
+        if len(original_df) != len(updated_df):
+            raise ValueError("Les fichiers CSV n'ont pas le même nombre de lignes")
 
-    # Colonnes à prendre depuis le fichier mis à jour
-    update_columns = ['num_cpu', 'memory', 'disk_1_taille', 'disk_2_taille', 'disk_3_taille']
+        # Colonnes à prendre depuis le fichier mis à jour
+        update_columns = ['num_cpu', 'memory', 'disk_1_taille', 'disk_2_taille', 'disk_3_taille']
 
-    # Créer un nouveau DataFrame
-    result_df = original_df.copy()
+        # Créer un nouveau DataFrame
+        result_df = original_df.copy()
 
-    # Mettre à jour les colonnes spécifiées
-    for col in update_columns:
-        if col in updated_df.columns:
-            result_df[col] = updated_df[col]
-        else:
-            print(f"Attention: la colonne '{col}' n'existe pas dans le fichier mis à jour")
+        # Mettre à jour les colonnes spécifiées
+        for col in update_columns:
+            if col in updated_df.columns:
+                result_df[col] = updated_df[col]
+            else:
+                click.echo(f"Attention: la colonne '{col}' n'existe pas dans le fichier mis à jour")
 
-    # Sauvegarder le résultat
-    result_df.to_csv(output, index=False)
-    print(f"Fichier de sortie généré: {output}")
+        # Sauvegarder le résultat
+        result_df.to_csv(output, index=False)
+        click.echo(f"Fichier de sortie généré avec succès: {output}")
+
+    except Exception as e:
+        click.echo(f"Erreur: {str(e)}", err=True)
+        raise click.Abort()
 
 if __name__ == '__main__':
     compare_csv()
