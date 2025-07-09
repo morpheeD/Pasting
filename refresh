@@ -18,6 +18,7 @@ def extract_tags(state: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
                 tag_attrs = resource['instances'][0]['attributes']
                 tag_id = tag_attrs.get('id')
                 if tag_id:
+                    # Extraire le nom de la catégorie depuis category_id
                     category_id = tag_attrs.get('category_id', '')
                     category_name = category_id.split(':')[-2] if category_id else ''
                     tags[tag_id] = {
@@ -31,19 +32,52 @@ def extract_vms_with_tags(state: Dict[str, Any], tags: Dict[str, Dict[str, str]]
     """Extrait les VMs avec leurs tags associés."""
     vms = []
 
+    # Mapping des catégories de tags aux noms de colonnes
+    tag_mapping = {
+        'workload': 'workload',
+        'env': 'env',
+        'confidentiality': 'confidentiality_tag',
+        'integrity': 'integrity_tag',
+        'availability': 'availability_tag',
+        'BackupPolicy': 'backup_policy_tag',
+        'managedby': 'managedby_tag',
+        'business_service': 'business_service_tag',
+        'technical_service': 'technical_service_tag',
+        'component': 'component_tag',
+        'security_zone': 'security_zone_tag',
+        'owner': 'owner_tag',
+        'site': 'site',
+        'usage': 'usage',
+        'appli': 'appli'
+    }
+
     for resource in state.get('resources', []):
         if resource.get('type') == 'vsphere_virtual_machine':
             if not resource.get('instances'):
                 continue
 
             attrs = resource['instances'][0]['attributes']
-            vm_tags = {}
-
-            # Initialiser les champs de tags
-            tag_fields = {
+            vm_data = {
+                'vm_name': attrs.get('name', ''),
+                'num_cpus': attrs.get('num_cpus', ''),
                 'workload': '',
                 'env': '',
-                'env_tag': '',
+                'memory': attrs.get('memory', ''),
+                'vm_dns': '',
+                'vm_domain': attrs.get('domain', ''),
+                'disk_1_taille': '',
+                'disk_1_nom': '',
+                'disk_2_taille': '',
+                'disk_2_nom': '',
+                'disk_3_taille': '',
+                'disk_3_nom': '',
+                'site': '',
+                'usage': '',
+                'appli': '',
+                'network': '',
+                'path_folder': attrs.get('folder', ''),
+                'vm_ressource_pool': attrs.get('resource_pool_id', ''),
+                'vm_template': '',
                 'confidentiality_tag': '',
                 'integrity_tag': '',
                 'availability_tag': '',
@@ -53,10 +87,45 @@ def extract_vms_with_tags(state: Dict[str, Any], tags: Dict[str, Dict[str, str]]
                 'technical_service_tag': '',
                 'component_tag': '',
                 'security_zone_tag': '',
-                'owner_tag': ''
+                'owner_tag': '',
+                'env_tag': ''
             }
 
-            # Extraire les associations de tags si elles existent
+            # Gestion des disques
+            disks = attrs.get('disk', [])
+            if isinstance(disks, dict):
+                disks = [disks]
+
+            for i, disk in enumerate(disks[:3], 1):
+                if isinstance(disk, dict):
+                    vm_data[f'disk_{i}_taille'] = disk.get('size', '')
+                    vm_data[f'disk_{i}_nom'] = disk.get('label', '')
+
+            # Gestion des interfaces réseau
+            network_interfaces = attrs.get('network_interface', [])
+            if isinstance(network_interfaces, dict):
+                network_interfaces = [network_interfaces]
+            if network_interfaces and isinstance(network_interfaces[0], dict):
+                vm_data['network'] = network_interfaces[0].get('network_id', '')
+
+            # Conversion de la mémoire en Go
+            try:
+                memory_mb = int(attrs.get('memory', 0))
+                vm_data['memory'] = memory_mb // 1024
+            except (ValueError, TypeError):
+                vm_data['memory'] = ''
+
+            # Gestion du template
+            clone = attrs.get('clone', {})
+            if isinstance(clone, dict):
+                vm_data['vm_template'] = clone.get('template_uuid', '')
+
+            # Gestion des adresses IP
+            ip_addresses = attrs.get('guest_ip_addresses', [])
+            if isinstance(ip_addresses, list) and ip_addresses:
+                vm_data['vm_dns'] = ip_addresses[0]
+
+            # Association des tags
             if 'tags' in attrs:
                 for tag_id in attrs['tags']:
                     if tag_id in tags:
@@ -64,97 +133,15 @@ def extract_vms_with_tags(state: Dict[str, Any], tags: Dict[str, Dict[str, str]]
                         category = tag['category']
                         name = tag['name']
 
-                        # Mapper les tags aux champs spécifiques
-                        if category == 'workload':
-                            tag_fields['workload'] = name
-                        elif category == 'env':
-                            tag_fields['env'] = name
-                            tag_fields['env_tag'] = name
-                        elif category == 'confidentiality':
-                            tag_fields['confidentiality_tag'] = name
-                        elif category == 'integrity':
-                            tag_fields['integrity_tag'] = name
-                        elif category == 'availability':
-                            tag_fields['availability_tag'] = name
-                        elif category == 'BackupPolicy':
-                            tag_fields['backup_policy_tag'] = name
-                        elif category == 'managedby':
-                            tag_fields['managedby_tag'] = name
-                        elif category == 'business_service':
-                            tag_fields['business_service_tag'] = name
-                        elif category == 'technical_service':
-                            tag_fields['technical_service_tag'] = name
-                        elif category == 'component':
-                            tag_fields['component_tag'] = name
-                        elif category == 'security_zone':
-                            tag_fields['security_zone_tag'] = name
-                        elif category == 'owner':
-                            tag_fields['owner_tag'] = name
+                        # Appliquer le mapping des tags
+                        if category in tag_mapping:
+                            vm_data[tag_mapping[category]] = name
 
-            # Initialisation des disques
-            disk_info = {
-                'disk_1_taille': '', 'disk_1_nom': '',
-                'disk_2_taille': '', 'disk_2_nom': '',
-                'disk_3_taille': '', 'disk_3_nom': ''
-            }
+                        # Cas spécial pour env_tag qui est une copie de env
+                        if category == 'env':
+                            vm_data['env_tag'] = name
 
-            # Gestion des disques
-            disks = attrs.get('disk', [])
-            if disks and isinstance(disks, dict):
-                disks = [disks]
-
-            for i, disk in enumerate(disks[:3], 1):
-                if isinstance(disk, dict):
-                    disk_info[f'disk_{i}_taille'] = disk.get('size', '')
-                    disk_info[f'disk_{i}_nom'] = disk.get('label', '')
-                elif isinstance(disk, (list, tuple)) and len(disk) > 0:
-                    disk_info[f'disk_{i}_taille'] = disk[0].get('size', '') if isinstance(disk[0], dict) else ''
-                    disk_info[f'disk_{i}_nom'] = disk[0].get('label', '') if isinstance(disk[0], dict) else ''
-
-            # Gestion des interfaces réseau
-            network = ''
-            network_interfaces = attrs.get('network_interface', [])
-            if network_interfaces:
-                if isinstance(network_interfaces, dict):
-                    network_interfaces = [network_interfaces]
-                if isinstance(network_interfaces, list) and len(network_interfaces) > 0:
-                    first_if = network_interfaces[0]
-                    if isinstance(first_if, dict):
-                        network = first_if.get('network_id', '')
-
-            # Conversion de la mémoire en Go
-            memory_mb = attrs.get('memory', 0)
-            try:
-                memory_gb = int(memory_mb) // 1024
-            except (ValueError, TypeError):
-                memory_gb = 0
-
-            # Construction de la VM avec les champs du header CSV
-            vm = {
-                'vm_name': attrs.get('name', ''),
-                'num_cpus': attrs.get('num_cpus', ''),
-                'memory': memory_gb,
-                'vm_dns': '',
-                'vm_domain': attrs.get('domain', ''),
-                'network': network,
-                'path_folder': attrs.get('folder', ''),
-                'vm_ressource_pool': attrs.get('resource_pool_id', ''),
-                'vm_template': '',
-                **disk_info,
-                **tag_fields  # Ajout des champs de tags
-            }
-
-            # Gestion du template
-            clone = attrs.get('clone', {})
-            if isinstance(clone, dict):
-                vm['vm_template'] = clone.get('template_uuid', '')
-
-            # Gestion des adresses IP
-            ip_addresses = attrs.get('guest_ip_addresses', [])
-            if ip_addresses and isinstance(ip_addresses, list) and len(ip_addresses) > 0:
-                vm['vm_dns'] = ip_addresses[0]
-
-            vms.append(vm)
+            vms.append(vm_data)
 
     return vms
 
@@ -163,10 +150,7 @@ def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
     with open(state_path, 'r', encoding='utf-8') as f:
         state = json.load(f)
 
-    # D'abord extraire tous les tags
     tags = extract_tags(state)
-
-    # Ensuite extraire les VMs avec leurs tags
     vms = extract_vms_with_tags(state, tags)
 
     if not vms:
