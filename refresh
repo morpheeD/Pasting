@@ -1,3 +1,14 @@
+import pandas as pd
+import json
+from pathlib import Path
+import click
+from typing import List, Dict, Any
+
+def load_csv_header(path: Path, sep: str = ";") -> List[str]:
+    """Charge l'en-tête du CSV."""
+    with open(path, 'r', encoding='utf-8') as f:
+        return f.readline().strip().split(sep)
+
 def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extrait les VMs et les tags du state Terraform."""
     vms = []
@@ -13,10 +24,9 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                     # Récupérer le nom de la catégorie à partir de l'ID de catégorie
                     category_id = tag_attrs.get('category_id', '')
                     category_name = category_id.split(':')[-2] if category_id else ''
-
                     tags[tag_id] = {
                         'name': tag_attrs.get('name', ''),
-                        'category': category_name,  # Utiliser le nom extrait de l'ID
+                        'category': category_name,
                         'description': tag_attrs.get('description', '')
                     }
 
@@ -61,7 +71,6 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                         elif tag['category'] == 'owner':
                             vm_tags['owner_tag'] = tag['name']
 
-            # Le reste de votre code pour les VMs reste inchangé
             # Initialisation des disques
             disk_info = {
                 'disk_1_taille': '', 'disk_1_nom': '',
@@ -106,7 +115,7 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                 'num_cpus': attrs.get('num_cpus', ''),
                 'workload': '',
                 'env': '',
-                'memory': memory_gb,  # Mémoire en Go
+                'memory': memory_gb,
                 'vm_dns': '',
                 'vm_domain': attrs.get('domain', ''),
                 'site': '',
@@ -145,3 +154,59 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             vms.append(vm)
 
     return vms
+
+def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
+    """Construit un DataFrame à partir du state Terraform."""
+    with open(state_path, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+
+    vms = extract_vms_and_tags(state)
+
+    if not vms:
+        return pd.DataFrame(columns=csv_header)
+
+    df = pd.DataFrame(vms)
+
+    # S'assurer que toutes les colonnes du header sont présentes
+    for col in csv_header:
+        if col not in df.columns:
+            df[col] = ''
+
+    # Réorganiser selon l'ordre du header
+    df = df[csv_header]
+
+    return df
+
+@click.command()
+@click.option('--csv-header', type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              required=True, help='Fichier CSV dont on veut conserver l\'en-tête')
+@click.option('--terraform-state', type=click.Path(exists=True, dir_okay=False, path_type=Path),
+              required=True, help='Fichier de state Terraform au format JSON')
+@click.option('--output', type=click.Path(dir_okay=False, path_type=Path),
+              default=Path('vsphere_vms.csv'), help='Fichier CSV de sortie')
+@click.option('--sep', default=';', help='Séparateur CSV')
+def main(csv_header: Path, terraform_state: Path, output: Path, sep: str):
+    """Génère un CSV des VMs VSphere à partir d'un state Terraform."""
+    try:
+        click.echo("Chargement de l'en-tête du CSV...")
+        header = load_csv_header(csv_header, sep)
+
+        click.echo("Traitement du state Terraform...")
+        df = build_dataframe(terraform_state, header)
+
+        click.echo(f"Écriture du fichier de sortie {output}...")
+        df.to_csv(output, sep=sep, index=False, encoding='utf-8')
+
+        click.echo(f"✅ Fichier généré avec succès: {output}")
+        click.echo(f"Nombre de VMs traitées: {len(df)}")
+        click.echo(f"Colonnes incluses: {', '.join(header)}")
+
+    except json.JSONDecodeError:
+        click.echo("❌ Erreur: Le fichier de state Terraform n'est pas un JSON valide", err=True)
+        raise click.Abort()
+    except Exception as e:
+        click.echo(f"❌ Erreur: {str(e)}", err=True)
+        raise click.Abort()
+
+if __name__ == "__main__":
+    main()
