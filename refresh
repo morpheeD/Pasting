@@ -9,7 +9,7 @@ def load_csv_header(path: Path, sep: str = ";") -> List[str]:
     with open(path, 'r', encoding='utf-8') as f:
         return f.readline().strip().split(sep)
 
-def extract_vms_and_tags(state: Dict[str, Any]) -> Dict[str, Any]:
+def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extrait les VMs et les tags du state Terraform."""
     vms = []
     tags = {}
@@ -46,7 +46,7 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> Dict[str, Any]:
                             vm_tags['workload'] = tag['name']
                         elif tag['category'] == 'env':
                             vm_tags['env'] = tag['name']
-                            vm_tags['env_tag'] = tag['name']  # Dupliquer dans env_tag si nécessaire
+                            vm_tags['env_tag'] = tag['name']
                         elif tag['category'] == 'confidentiality':
                             vm_tags['confidentiality_tag'] = tag['name']
                         elif tag['category'] == 'integrity':
@@ -75,16 +75,30 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> Dict[str, Any]:
                 'disk_3_taille': '', 'disk_3_nom': ''
             }
 
-            # Gestion des disques dans le dictionnaire
-            if 'disk' in attrs:
-                disks = attrs['disk']
-                if not isinstance(disks, list):
-                    disks = [disks]  # Convertir en liste si c'est un dict unique
+            # Gestion des disques
+            disks = attrs.get('disk', [])
+            if disks and isinstance(disks, dict):  # Si c'est un seul disque sous forme de dict
+                disks = [disks]
 
-                for i, disk in enumerate(disks[:3], 1):  # Limite à 3 disques max
-                    if isinstance(disk, dict):
-                        disk_info[f'disk_{i}_taille'] = disk.get('size', '')
-                        disk_info[f'disk_{i}_nom'] = disk.get('label', '')
+            for i, disk in enumerate(disks[:3], 1):  # Limite à 3 disques max
+                if isinstance(disk, dict):
+                    disk_info[f'disk_{i}_taille'] = disk.get('size', '')
+                    disk_info[f'disk_{i}_nom'] = disk.get('label', '')
+                elif isinstance(disk, (list, tuple)) and len(disk) > 0:
+                    # Cas où le disque est une liste (peu probable mais possible)
+                    disk_info[f'disk_{i}_taille'] = disk[0].get('size', '') if isinstance(disk[0], dict) else ''
+                    disk_info[f'disk_{i}_nom'] = disk[0].get('label', '') if isinstance(disk[0], dict) else ''
+
+            # Gestion des interfaces réseau
+            network = ''
+            network_interfaces = attrs.get('network_interface', [])
+            if network_interfaces:
+                if isinstance(network_interfaces, dict):  # Si c'est un seul interface
+                    network_interfaces = [network_interfaces]
+                if isinstance(network_interfaces, list) and len(network_interfaces) > 0:
+                    first_if = network_interfaces[0]
+                    if isinstance(first_if, dict):
+                        network = first_if.get('network_id', '')
 
             # Construction de la VM avec les champs du header CSV
             vm = {
@@ -93,16 +107,16 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> Dict[str, Any]:
                 'workload': '',
                 'env': '',
                 'memory': attrs.get('memory', ''),
-                'vm_dns': attrs.get('guest_ip_addresses', [None])[0] if 'guest_ip_addresses' in attrs else '',
+                'vm_dns': '',
                 'vm_domain': attrs.get('domain', ''),
                 'site': '',
                 'usage': '',
                 'appli': '',
-                'network': attrs.get('network_interface', [{}])[0].get('network_id', '') if 'network_interface' in attrs else '',
+                'network': network,
                 'path_folder': attrs.get('folder', ''),
                 'vm_ressource_pool': attrs.get('resource_pool_id', ''),
-                'vm_template': attrs.get('clone', {}).get('template_uuid', '') if 'clone' in attrs else '',
-                **disk_info,  # Ajouter les infos disques
+                'vm_template': '',
+                **disk_info,
                 'confidentiality_tag': '',
                 'integrity_tag': '',
                 'availability_tag': '',
@@ -116,9 +130,18 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> Dict[str, Any]:
                 'env_tag': ''
             }
 
+            # Gestion du template
+            clone = attrs.get('clone', {})
+            if isinstance(clone, dict):
+                vm['vm_template'] = clone.get('template_uuid', '')
+
+            # Gestion des adresses IP
+            ip_addresses = attrs.get('guest_ip_addresses', [])
+            if ip_addresses and isinstance(ip_addresses, list) and len(ip_addresses) > 0:
+                vm['vm_dns'] = ip_addresses[0]
+
             # Appliquer les tags extraits
             vm.update(vm_tags)
-
             vms.append(vm)
 
     return vms
