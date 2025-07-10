@@ -23,6 +23,10 @@ def compare_csv(original, updated, output):
         # Colonnes à mettre à jour (noms exacts du fichier)
         update_columns = ['num_cpus', 'memory', 'disk_1_taille', 'disk_2_taille', 'disk_3_taille']
 
+        # Ajouter toutes les colonnes se terminant par _tag
+        tag_columns = [col for col in updated_df.columns if col.endswith('_tag')]
+        update_columns.extend(tag_columns)
+
         # Vérifier que vm_name existe dans les deux fichiers
         if 'vm_name' not in original_df.columns or 'vm_name' not in updated_df.columns:
             raise ValueError("La colonne 'vm_name' est manquante dans un des fichiers")
