@@ -6,174 +6,176 @@ from typing import List, Dict, Any
 
 def load_csv_header(path: Path, sep: str = ";") -> List[str]:
     """Charge l'en-tête du CSV."""
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.readline().strip().split(sep)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.readline().strip().split(sep)
+    except Exception as e:
+        raise click.ClickException(f"Erreur lors de la lecture du fichier CSV: {str(e)}")
 
 def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extrait les VMs et les tags du state Terraform."""
     vms = []
     tags = {}
 
-    # D'abord extraire toutes les ressources de type tag (data sources)
+    # Extraction des tags
     for resource in state.get('resources', []):
-        if resource.get('type') == 'vsphere_tag' and resource.get('mode') == 'data':
-            if resource.get('instances'):
-                tag_attrs = resource['instances'][0]['attributes']
-                tag_id = tag_attrs.get('id')
-                tag_name_from_resource = resource.get('name', '')  # Nom de la ressource (ex: "BackupPolicy")
-                
-                if tag_id:
-                    tags[tag_id] = {
-                        'name': tag_attrs.get('name', ''),
-                        'category': tag_name_from_resource.lower(),  # Utiliser le nom de la ressource comme catégorie
-                        'description': tag_attrs.get('description', ''),
-                        'category_id': tag_attrs.get('category_id', '')
-                    }
-
-    # Aussi extraire les tags managés (mode = "managed")
-    for resource in state.get('resources', []):
-        if resource.get('type') == 'vsphere_tag' and resource.get('mode') == 'managed':
-            if resource.get('instances'):
-                tag_attrs = resource['instances'][0]['attributes']
-                tag_id = tag_attrs.get('id')
-                if tag_id:
-                    tags[tag_id] = {
-                        'name': tag_attrs.get('name', ''),
-                        'category': tag_attrs.get('category', ''),
-                        'description': tag_attrs.get('description', '')
-                    }
-
-    # Ensuite extraire les VMs et leurs associations de tags
-    for resource in state.get('resources', []):
-        if resource.get('type') == 'vsphere_virtual_machine':
+        if resource.get('type') == 'vsphere_tag':
             if not resource.get('instances'):
                 continue
 
-            attrs = resource['instances'][0]['attributes']
-            vm_tags = {}
+            tag_attrs = resource['instances'][0]['attributes']
+            tag_id = tag_attrs.get('id')
 
-            # Extraire les associations de tags si elles existent
-            if 'tags' in attrs:
-                for tag_id in attrs['tags']:
-                    if tag_id in tags:
-                        tag = tags[tag_id]
-                        category = tag['category'].lower()
-                        
-                        # Mapper les tags aux colonnes spécifiques selon le nom de la ressource
-                        if category == 'workload':
-                            vm_tags['workload'] = tag['name']
-                        elif category == 'env' or category == 'environment':
-                            vm_tags['env'] = tag['name']
-                            vm_tags['env_tag'] = tag['name']
-                        elif category == 'confidentiality':
-                            vm_tags['confidentiality_tag'] = tag['name']
-                        elif category == 'integrity':
-                            vm_tags['integrity_tag'] = tag['name']
-                        elif category == 'availability':
-                            vm_tags['availability_tag'] = tag['name']
-                        elif category == 'backuppolicy' or category == 'backup_policy':
-                            vm_tags['backup_policy_tag'] = tag['name']
-                        elif category == 'managedby' or category == 'managed_by':
-                            vm_tags['managedby_tag'] = tag['name']
-                        elif category == 'businessservice' or category == 'business_service':
-                            vm_tags['business_service_tag'] = tag['name']
-                        elif category == 'technicalservice' or category == 'technical_service':
-                            vm_tags['technical_service_tag'] = tag['name']
-                        elif category == 'component':
-                            vm_tags['component_tag'] = tag['name']
-                        elif category == 'securityzone' or category == 'security_zone':
-                            vm_tags['security_zone_tag'] = tag['name']
-                        elif category == 'owner':
-                            vm_tags['owner_tag'] = tag['name']
+            if not tag_id:
+                continue
 
-            # Initialisation des disques
-            disk_info = {
-                'disk_1_taille': '', 'disk_1_nom': '',
-                'disk_2_taille': '', 'disk_2_nom': '',
-                'disk_3_taille': '', 'disk_3_nom': ''
-            }
+            if resource.get('mode') == 'data':
+                tag_name_from_resource = resource.get('name', '')
+                tags[tag_id] = {
+                    'name': tag_attrs.get('name', 'NA'),
+                    'category': tag_name_from_resource.lower(),
+                    'description': tag_attrs.get('description', 'NA'),
+                    'category_id': tag_attrs.get('category_id', 'NA')
+                }
+            elif resource.get('mode') == 'managed':
+                tags[tag_id] = {
+                    'name': tag_attrs.get('name', 'NA'),
+                    'category': tag_attrs.get('category', 'NA'),
+                    'description': tag_attrs.get('description', 'NA')
+                }
 
-            # Gestion des disques
-            disks = attrs.get('disk', [])
-            if disks and isinstance(disks, dict):
-                disks = [disks]
+    # Extraction des VMs
+    for resource in state.get('resources', []):
+        if resource.get('type') != 'vsphere_virtual_machine':
+            continue
 
-            for i, disk in enumerate(disks[:3], 1):
-                if isinstance(disk, dict):
-                    disk_info[f'disk_{i}_taille'] = disk.get('size', '')
-                    disk_info[f'disk_{i}_nom'] = disk.get('label', '')
-                elif isinstance(disk, (list, tuple)) and len(disk) > 0:
-                    disk_info[f'disk_{i}_taille'] = disk[0].get('size', '') if isinstance(disk[0], dict) else ''
-                    disk_info[f'disk_{i}_nom'] = disk[0].get('label', '') if isinstance(disk[0], dict) else ''
+        if not resource.get('instances'):
+            continue
 
-            # Gestion des interfaces réseau
-            network = ''
-            network_interfaces = attrs.get('network_interface', [])
-            if network_interfaces:
-                if isinstance(network_interfaces, dict):
-                    network_interfaces = [network_interfaces]
-                if isinstance(network_interfaces, list) and len(network_interfaces) > 0:
-                    first_if = network_interfaces[0]
-                    if isinstance(first_if, dict):
-                        network = first_if.get('network_id', '')
+        attrs = resource['instances'][0]['attributes']
+        vm_tags = {}
 
-            # Conversion de la mémoire en Go
-            memory_mb = attrs.get('memory', 0)
-            try:
-                memory_gb = int(memory_mb) // 1024
-            except (ValueError, TypeError):
-                memory_gb = 0
+        # Extraction des tags associés
+        if 'tags' in attrs:
+            for tag_id in attrs.get('tags', []):
+                if tag_id in tags:
+                    tag = tags[tag_id]
+                    category = tag['category'].lower()
 
-            # Construction de la VM avec les champs du header CSV
-            vm = {
-                'vm_name': attrs.get('name', ''),
-                'num_cpus': attrs.get('num_cpus', ''),
-                'workload': '',
-                'env': '',
-                'memory': memory_gb,  # Mémoire en Go
-                'vm_dns': '',
-                'vm_domain': attrs.get('domain', ''),
-                'site': '',
-                'usage': '',
-                'appli': '',
-                'network': network,
-                'path_folder': attrs.get('folder', ''),
-                'vm_ressource_pool': attrs.get('resource_pool_id', ''),
-                'vm_template': '',
-                **disk_info,
-                'confidentiality_tag': '',
-                'integrity_tag': '',
-                'availability_tag': '',
-                'backup_policy_tag': '',
-                'managedby_tag': '',
-                'business_service_tag': '',
-                'technical_service_tag': '',
-                'component_tag': '',
-                'security_zone_tag': '',
-                'owner_tag': '',
-                'env_tag': ''
-            }
+                    if category == 'workload':
+                        vm_tags['workload'] = tag['name']
+                    elif category in ['env', 'environment']:
+                        vm_tags['env'] = tag['name']
+                        vm_tags['env_tag'] = tag['name']
+                    elif category == 'confidentiality':
+                        vm_tags['confidentiality_tag'] = tag['name']
+                    elif category == 'integrity':
+                        vm_tags['integrity_tag'] = tag['name']
+                    elif category == 'availability':
+                        vm_tags['availability_tag'] = tag['name']
+                    elif category in ['backuppolicy', 'backup_policy']:
+                        vm_tags['backup_policy_tag'] = tag['name']
+                    elif category in ['managedby', 'managed_by']:
+                        vm_tags['managedby_tag'] = tag['name']
+                    elif category in ['businessservice', 'business_service']:
+                        vm_tags['business_service_tag'] = tag['name']
+                    elif category in ['technicalservice', 'technical_service']:
+                        vm_tags['technical_service_tag'] = tag['name']
+                    elif category == 'component':
+                        vm_tags['component_tag'] = tag['name']
+                    elif category in ['securityzone', 'security_zone']:
+                        vm_tags['security_zone_tag'] = tag['name']
+                    elif category == 'owner':
+                        vm_tags['owner_tag'] = tag['name']
 
-            # Gestion du template
-            clone = attrs.get('clone', {})
-            if isinstance(clone, dict):
-                vm['vm_template'] = clone.get('template_uuid', '')
+        # Initialisation des valeurs par défaut
+        vm = {
+            'vm_name': attrs.get('name', 'NA'),
+            'num_cpus': str(attrs.get('num_cpus', 'NA')),
+            'workload': 'NA',
+            'env': 'NA',
+            'memory': 'NA',
+            'vm_dns': 'NA',
+            'vm_domain': attrs.get('domain', 'NA'),
+            'site': 'NA',
+            'usage': 'NA',
+            'appli': 'NA',
+            'network': 'NA',
+            'path_folder': attrs.get('folder', 'NA'),
+            'vm_ressource_pool': attrs.get('resource_pool_id', 'NA'),
+            'vm_template': 'NA',
+            'disk_1_taille': 'NA', 'disk_1_nom': 'NA',
+            'disk_2_taille': 'NA', 'disk_2_nom': 'NA',
+            'disk_3_taille': 'NA', 'disk_3_nom': 'NA',
+            'confidentiality_tag': 'NA',
+            'integrity_tag': 'NA',
+            'availability_tag': 'NA',
+            'backup_policy_tag': 'NA',
+            'managedby_tag': 'NA',
+            'business_service_tag': 'NA',
+            'technical_service_tag': 'NA',
+            'component_tag': 'NA',
+            'security_zone_tag': 'NA',
+            'owner_tag': 'NA',
+            'env_tag': 'NA'
+        }
 
-            # Gestion des adresses IP
-            ip_addresses = attrs.get('guest_ip_addresses', [])
-            if ip_addresses and isinstance(ip_addresses, list) and len(ip_addresses) > 0:
-                vm['vm_dns'] = ip_addresses[0]
+        # Gestion de la mémoire (conversion MB -> GB)
+        try:
+            memory_mb = int(attrs.get('memory', 0))
+            vm['memory'] = memory_mb // 1024 if memory_mb > 0 else 'NA'
+        except (ValueError, TypeError):
+            vm['memory'] = 'NA'
 
-            # Appliquer les tags extraits
-            vm.update(vm_tags)
-            vms.append(vm)
+        # Gestion des disques
+        disks = attrs.get('disk', [])
+        if not isinstance(disks, list):
+            disks = [disks] if disks else []
+
+        for i, disk in enumerate(disks[:3], 1):
+            if isinstance(disk, dict):
+                vm[f'disk_{i}_taille'] = str(disk.get('size', 'NA'))
+                vm[f'disk_{i}_nom'] = disk.get('label', 'NA')
+            elif isinstance(disk, (list, tuple)) and len(disk) > 0:
+                disk_data = disk[0] if isinstance(disk[0], dict) else {}
+                vm[f'disk_{i}_taille'] = str(disk_data.get('size', 'NA'))
+                vm[f'disk_{i}_nom'] = disk_data.get('label', 'NA')
+
+        # Gestion du réseau
+        network_interfaces = attrs.get('network_interface', [])
+        if isinstance(network_interfaces, dict):
+            network_interfaces = [network_interfaces]
+
+        if isinstance(network_interfaces, list) and len(network_interfaces) > 0:
+            first_if = network_interfaces[0]
+            if isinstance(first_if, dict):
+                vm['network'] = first_if.get('network_id', 'NA')
+
+        # Gestion du template
+        clone = attrs.get('clone', {})
+        if isinstance(clone, dict):
+            vm['vm_template'] = clone.get('template_uuid', 'NA')
+
+        # Gestion des adresses IP
+        ip_addresses = attrs.get('guest_ip_addresses', [])
+        if isinstance(ip_addresses, list) and len(ip_addresses) > 0:
+            vm['vm_dns'] = ip_addresses[0]
+
+        # Application des tags
+        vm.update(vm_tags)
+        vms.append(vm)
 
     return vms
 
 def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
     """Construit un DataFrame à partir du state Terraform."""
-    with open(state_path, 'r', encoding='utf-8') as f:
-        state = json.load(f)
+    try:
+        with open(state_path, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+    except json.JSONDecodeError:
+        raise click.ClickException("Le fichier de state Terraform n'est pas un JSON valide")
+    except Exception as e:
+        raise click.ClickException(f"Erreur lors de la lecture du fichier state: {str(e)}")
 
     vms = extract_vms_and_tags(state)
 
@@ -185,7 +187,7 @@ def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
     # S'assurer que toutes les colonnes du header sont présentes
     for col in csv_header:
         if col not in df.columns:
-            df[col] = ''
+            df[col] = 'NA'
 
     # Réorganiser selon l'ordre du header
     df = df[csv_header]
@@ -208,21 +210,20 @@ def main(csv_header: Path, terraform_state: Path, output: Path, sep: str, debug:
         header = load_csv_header(csv_header, sep)
 
         click.echo("Traitement du state Terraform...")
-        
+
         if debug:
-            # Afficher les tags trouvés pour debug
             with open(terraform_state, 'r', encoding='utf-8') as f:
                 state = json.load(f)
-            
+
             click.echo("\n=== DEBUG: Tags trouvés ===")
             for resource in state.get('resources', []):
                 if resource.get('type') == 'vsphere_tag':
                     if resource.get('instances'):
                         tag_attrs = resource['instances'][0]['attributes']
                         tag_name_from_resource = resource.get('name', '')
-                        click.echo(f"Tag: {tag_name_from_resource} -> {tag_attrs.get('name', '')} (ID: {tag_attrs.get('id', '')})")
+                        click.echo(f"Tag: {tag_name_from_resource} -> {tag_attrs.get('name', 'NA')} (ID: {tag_attrs.get('id', 'NA')})")
             click.echo("=== FIN DEBUG ===\n")
-        
+
         df = build_dataframe(terraform_state, header)
 
         click.echo(f"Écriture du fichier de sortie {output}...")
@@ -232,9 +233,6 @@ def main(csv_header: Path, terraform_state: Path, output: Path, sep: str, debug:
         click.echo(f"Nombre de VMs traitées: {len(df)}")
         click.echo(f"Colonnes incluses: {', '.join(header)}")
 
-    except json.JSONDecodeError:
-        click.echo("❌ Erreur: Le fichier de state Terraform n'est pas un JSON valide", err=True)
-        raise click.Abort()
     except Exception as e:
         click.echo(f"❌ Erreur: {str(e)}", err=True)
         raise click.Abort()
