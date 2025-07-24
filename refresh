@@ -12,8 +12,8 @@ def load_csv_header(path: Path, sep: str = ";") -> List[str]:
     except Exception as e:
         raise click.ClickException(f"Erreur lors de la lecture du fichier CSV: {str(e)}")
 
-def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extrait les VMs et les tags du state Terraform."""
+def extract_vms_and_tags(state: Dict[str, Any], csv_header: List[str]) -> List[Dict[str, Any]]:
+    """Extrait les VMs et les tags du state Terraform en respectant les colonnes du CSV."""
     vms = []
     tags = {}
 
@@ -55,6 +55,38 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         attrs = resource['instances'][0]['attributes']
         vm_tags = {}
 
+        # Initialisation avec les colonnes du CSV
+        vm = {col: 'NA' for col in csv_header}
+
+        # Remplissage des informations de base
+        vm['vm_name'] = attrs.get('name', 'NA')
+        vm['num_cpus'] = str(attrs.get('num_cpus', 'NA'))
+        vm['vm_domain'] = attrs.get('domain', 'NA')
+        vm['path_folder'] = attrs.get('folder', 'NA')
+        vm['vm_ressource_pool'] = attrs.get('resource_pool_id', 'NA')
+
+        # Gestion de la mémoire
+        try:
+            memory_mb = int(attrs.get('memory', 0))
+            vm['memory'] = memory_mb // 1024 if memory_mb > 0 else 'NA'
+        except (ValueError, TypeError):
+            vm['memory'] = 'NA'
+
+        # Gestion des disques - on ignore le disque 0 (disque système)
+        disks = attrs.get('disk', [])
+        if not isinstance(disks, list):
+            disks = [disks] if disks else []
+
+        # On commence à 1 pour ignorer le disque 0
+        for i, disk in enumerate(disks[1:], start=1):
+            if isinstance(disk, dict):
+                vm[f'disk_{i}_taille'] = str(disk.get('size', 'NA'))
+                vm[f'disk_{i}_nom'] = disk.get('label', 'NA')
+            elif isinstance(disk, (list, tuple)) and len(disk) > 0:
+                disk_data = disk[0] if isinstance(disk[0], dict) else {}
+                vm[f'disk_{i}_taille'] = str(disk_data.get('size', 'NA'))
+                vm[f'disk_{i}_nom'] = disk_data.get('label', 'NA')
+
         # Extraction des tags associés
         if 'tags' in attrs:
             for tag_id in attrs.get('tags', []):
@@ -63,83 +95,30 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
                     category = tag['category'].lower()
 
                     if category == 'workload':
-                        vm_tags['workload'] = tag['name']
+                        vm['workload'] = tag['name']
                     elif category in ['env', 'environment']:
-                        vm_tags['env'] = tag['name']
-                        vm_tags['env_tag'] = tag['name']
+                        vm['env'] = tag['name']
+                        vm['env_tag'] = tag['name']
                     elif category == 'confidentiality':
-                        vm_tags['confidentiality_tag'] = tag['name']
+                        vm['confidentiality_tag'] = tag['name']
                     elif category == 'integrity':
-                        vm_tags['integrity_tag'] = tag['name']
+                        vm['integrity_tag'] = tag['name']
                     elif category == 'availability':
-                        vm_tags['availability_tag'] = tag['name']
+                        vm['availability_tag'] = tag['name']
                     elif category in ['backuppolicy', 'backup_policy']:
-                        vm_tags['backup_policy_tag'] = tag['name']
+                        vm['backup_policy_tag'] = tag['name']
                     elif category in ['managedby', 'managed_by']:
-                        vm_tags['managedby_tag'] = tag['name']
+                        vm['managedby_tag'] = tag['name']
                     elif category in ['businessservice', 'business_service']:
-                        vm_tags['business_service_tag'] = tag['name']
+                        vm['business_service_tag'] = tag['name']
                     elif category in ['technicalservice', 'technical_service']:
-                        vm_tags['technical_service_tag'] = tag['name']
+                        vm['technical_service_tag'] = tag['name']
                     elif category == 'component':
-                        vm_tags['component_tag'] = tag['name']
+                        vm['component_tag'] = tag['name']
                     elif category in ['securityzone', 'security_zone']:
-                        vm_tags['security_zone_tag'] = tag['name']
+                        vm['security_zone_tag'] = tag['name']
                     elif category == 'owner':
-                        vm_tags['owner_tag'] = tag['name']
-
-        # Initialisation des valeurs par défaut
-        vm = {
-            'vm_name': attrs.get('name', 'NA'),
-            'num_cpus': str(attrs.get('num_cpus', 'NA')),
-            'workload': 'NA',
-            'env': 'NA',
-            'memory': 'NA',
-            'vm_dns': 'NA',
-            'vm_domain': attrs.get('domain', 'NA'),
-            'site': 'NA',
-            'usage': 'NA',
-            'appli': 'NA',
-            'network': 'NA',
-            'path_folder': attrs.get('folder', 'NA'),
-            'vm_ressource_pool': attrs.get('resource_pool_id', 'NA'),
-            'vm_template': 'NA',
-            'disk_1_taille': 'NA', 'disk_1_nom': 'NA',
-            'disk_2_taille': 'NA', 'disk_2_nom': 'NA',
-            'disk_3_taille': 'NA', 'disk_3_nom': 'NA',
-            'confidentiality_tag': 'NA',
-            'integrity_tag': 'NA',
-            'availability_tag': 'NA',
-            'backup_policy_tag': 'NA',
-            'managedby_tag': 'NA',
-            'business_service_tag': 'NA',
-            'technical_service_tag': 'NA',
-            'component_tag': 'NA',
-            'security_zone_tag': 'NA',
-            'owner_tag': 'NA',
-            'env_tag': 'NA'
-        }
-
-        # Gestion de la mémoire (conversion MB -> GB)
-        try:
-            memory_mb = int(attrs.get('memory', 0))
-            vm['memory'] = memory_mb // 1024 if memory_mb > 0 else 'NA'
-        except (ValueError, TypeError):
-            vm['memory'] = 'NA'
-
-        # Gestion des disques
-        disks = attrs.get('disk', [])
-        if not isinstance(disks, list):
-            disks = [disks] if disks else []
-
-        for i, disk in enumerate(disks[:3], 1):
-            if isinstance(disk, dict):
-                vm[f'disk_{i}_taille'] = str(disk.get('size', 'NA'))
-                vm[f'disk_{i}_nom'] = disk.get('label', 'NA')
-            elif isinstance(disk, (list, tuple)) and len(disk) > 0:
-                disk_data = disk[0] if isinstance(disk[0], dict) else {}
-                vm[f'disk_{i}_taille'] = str(disk_data.get('size', 'NA'))
-                vm[f'disk_{i}_nom'] = disk_data.get('label', 'NA')
+                        vm['owner_tag'] = tag['name']
 
         # Gestion du réseau
         network_interfaces = attrs.get('network_interface', [])
@@ -161,8 +140,6 @@ def extract_vms_and_tags(state: Dict[str, Any]) -> List[Dict[str, Any]]:
         if isinstance(ip_addresses, list) and len(ip_addresses) > 0:
             vm['vm_dns'] = ip_addresses[0]
 
-        # Application des tags
-        vm.update(vm_tags)
         vms.append(vm)
 
     return vms
@@ -177,21 +154,12 @@ def build_dataframe(state_path: Path, csv_header: List[str]) -> pd.DataFrame:
     except Exception as e:
         raise click.ClickException(f"Erreur lors de la lecture du fichier state: {str(e)}")
 
-    vms = extract_vms_and_tags(state)
+    vms = extract_vms_and_tags(state, csv_header)
 
     if not vms:
         return pd.DataFrame(columns=csv_header)
 
     df = pd.DataFrame(vms)
-
-    # S'assurer que toutes les colonnes du header sont présentes
-    for col in csv_header:
-        if col not in df.columns:
-            df[col] = 'NA'
-
-    # Réorganiser selon l'ordre du header
-    df = df[csv_header]
-
     return df
 
 @click.command()
@@ -210,20 +178,6 @@ def main(csv_header: Path, terraform_state: Path, output: Path, sep: str, debug:
         header = load_csv_header(csv_header, sep)
 
         click.echo("Traitement du state Terraform...")
-
-        if debug:
-            with open(terraform_state, 'r', encoding='utf-8') as f:
-                state = json.load(f)
-
-            click.echo("\n=== DEBUG: Tags trouvés ===")
-            for resource in state.get('resources', []):
-                if resource.get('type') == 'vsphere_tag':
-                    if resource.get('instances'):
-                        tag_attrs = resource['instances'][0]['attributes']
-                        tag_name_from_resource = resource.get('name', '')
-                        click.echo(f"Tag: {tag_name_from_resource} -> {tag_attrs.get('name', 'NA')} (ID: {tag_attrs.get('id', 'NA')})")
-            click.echo("=== FIN DEBUG ===\n")
-
         df = build_dataframe(terraform_state, header)
 
         click.echo(f"Écriture du fichier de sortie {output}...")
