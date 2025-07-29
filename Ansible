@@ -1,0 +1,18 @@
+---
+- name: Vérifier/ajouter le search domain Morphée.ninja dans /etc/resolv.conf
+  hosts: all
+  become: yes
+  tasks:
+
+    - name: S’assurer qu’un search contenant Morphée.ninja est présent
+      lineinfile:
+        path: /etc/resolv.conf
+        # si une ligne search existe mais n’inclut pas Morphée.ninja, on la remplace
+        regexp: '^search\s+.*Morphée\.ninja'
+        # la ligne souhaitée
+        line: 'search Morphée.ninja'
+        # en l’absence totale de “search …” on l’ajoute en fin de fichier
+        state: present
+        # si on remplace, on écrase l’ancienne ligne search
+        insertafter: EOF
+        backup: yes
