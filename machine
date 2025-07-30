@@ -1,32 +1,60 @@
 ---
-- name: Desactivate cloud init for rhel 8.10
-  ansible.builtin.file:
-    path: /etc/cloud/cloud-init.disabled
-    state: touch
-  when: (ansible_facts['distribution_major_version'] == "8" and ansible_facts['distribution_version'] == "8.10")
+- name: Vérifier et comparer les fichiers machine-id
+  block:
+    - name: Vérifier l'existence des fichiers
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/machine-id
+        - /etc/isi_machine_id
+      register: file_stats
 
-- name: Supprimer le fichier machine-id s'il existe
-  ansible.builtin.file:
-    path: /etc/machine-id
-    state: absent
-  become: true
+    - name: Comparer les fichiers si les deux existent
+      ansible.builtin.command: diff /etc/machine-id /etc/isi_machine_id
+      register: diff_result
+      ignore_errors: yes
+      when: file_stats.results[0].stat.exists and file_stats.results[1].stat.exists
+      changed_when: false
 
-- name: Générer un nouveau machine-id
-  ansible.builtin.command:
-    cmd: dbus-uuidgen --ensure=/etc/machine-id
-  become: true
+    - name: Définir si les fichiers sont identiques
+      ansible.builtin.set_fact:
+        files_identical: "{{ diff_result.rc == 0 }}"
+      when: file_stats.results[0].stat.exists and file_stats.results[1].stat.exists
 
-- name: Forcer le redémarrage de la machine avec async
-  ansible.builtin.command:
-    cmd: shutdown -r now "Redémarrage forcé par Ansible"
-  async: 60
-  poll: 0
-  become: true
-  ignore_errors: yes
+  rescue:
+    - name: Définir files_identical à false en cas d'erreur
+      ansible.builtin.set_fact:
+        files_identical: false
 
-- name: Attendre que la machine soit de retour en ligne
-  ansible.builtin.wait_for_connection:
-    connect_timeout: 60
-    sleep: 5
-    delay: 5
-    timeout: 300
+- name: Exécuter les actions si les fichiers sont identiques
+  block:
+    - name: Désactiver cloud-init pour RHEL 8.10
+      ansible.builtin.file:
+        path: /etc/cloud/cloud-init.disabled
+        state: touch
+      when: ansible_facts['distribution_major_version'] == "8" and ansible_facts['distribution_version'] == "8.10"
+
+    - name: Supprimer le fichier machine-id
+      ansible.builtin.file:
+        path: /etc/machine-id
+        state: absent
+      become: true
+
+    - name: Générer un nouveau machine-id
+      ansible.builtin.command: dbus-uuidgen --ensure=/etc/machine-id
+      become: true
+
+    - name: Redémarrer la machine
+      ansible.builtin.command: shutdown -r now "Redémarrage forcé par Ansible"
+      async: 60
+      poll: 0
+      become: true
+      ignore_errors: yes
+
+    - name: Attendre la reconnexion
+      ansible.builtin.wait_for_connection:
+        connect_timeout: 60
+        sleep: 5
+        delay: 5
+        timeout: 300
+  when: files_identical | default(false)
