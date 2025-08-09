@@ -5,3 +5,6 @@ Attention: la colonne 'memory' n'existe pas dans le fichier mis à jour
 Attention: la colonne 'disk_1_taille' n'existe pas dans le fichier mis à jour
 Attention: la colonne 'disk_2_taille' n'existe pas dans le fichier mis à jour
 Attention: la colonne 'disk_3_taille' n'existe pas dans le fichier mis à jour
+
+
+a
