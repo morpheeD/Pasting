@@ -8,7 +8,8 @@ def extract_template_version(template):
     """Extrait la version après 'V-' dans un nom de template"""
     if not isinstance(template, str):
         return None
-    match = re.search(r'V-([^-]*)$', template.strip())
+    template = template.strip()
+    match = re.search(r'V-([^-]*)$', template)
     return match.group(1) if match else None
 
 def validate_template_row(row, vmaas_version):
@@ -22,14 +23,18 @@ def validate_template_row(row, vmaas_version):
     if version.parse(vmaas_version) >= version.parse("2.0.0"):
         template_version = extract_template_version(template)
         if template_version is None:
-            return False, f"Format invalide pour '{template}' (doit contenir 'V-' suivi d'une version)"
+            return False, f"Format invalide pour '{template}' (doit contenir 'V-' suivi d'une version ou 'ISIOPERATION')"
 
-        if template_version != "ISIOPERATION":
-            try:
-                if version.parse(template_version) < version.parse("2.0"):
-                    return False, f"Version '{template_version}' < 2.0 pour '{template}'"
-            except version.InvalidVersion:
-                return False, f"Version invalide '{template_version}' dans '{template}'"
+        # Cas spécial pour ISIOPERATION
+        if template_version == "ISIOPERATION":
+            return True, None
+
+        # Vérification des versions numériques
+        try:
+            if version.parse(template_version) < version.parse("2.0"):
+                return False, f"Version '{template_version}' < 2.0 pour '{template}'"
+        except version.InvalidVersion:
+            return False, f"Version invalide '{template_version}' dans '{template}'"
 
     return True, None
 
@@ -48,24 +53,24 @@ def validate_csv(csv_file, vmaas_version, chunk_size):
         if not file_path.suffix.lower() == '.csv':
             raise ValueError("Le fichier doit être un CSV")
 
+        # Vérification des colonnes requises
+        test_df = pd.read_csv(file_path, delimiter=';', nrows=1)
+        if 'vm_template' not in test_df.columns:
+            raise ValueError("Le fichier CSV doit contenir une colonne 'vm_template'")
+
         # Lecture par chunks pour les gros fichiers
         chunks = pd.read_csv(
             file_path,
             delimiter=';',
             chunksize=chunk_size,
-            dtype=str,  # Tout lire comme string pour éviter les conversions automatiques
+            dtype=str,
             encoding='utf-8-sig'
         )
 
         errors = []
         total_rows = 0
 
-        for i, chunk in enumerate(chunks):
-            # Vérification des colonnes requises
-            if 'vm_template' not in chunk.columns:
-                raise ValueError("Colonne 'vm_template' manquante")
-
-            # Validation des lignes
+        for chunk in chunks:
             for _, row in chunk.iterrows():
                 total_rows += 1
                 is_valid, error_msg = validate_template_row(row, vmaas_version)
@@ -75,7 +80,7 @@ def validate_csv(csv_file, vmaas_version, chunk_size):
         # Affichage des résultats
         if errors:
             click.echo(f"\n❌ {len(errors)} erreurs trouvées sur {total_rows} lignes:")
-            for error in errors[:20]:  # Affiche max 20 erreurs pour ne pas surcharger
+            for error in errors[:20]:  # Affiche max 20 erreurs
                 click.echo(f"- {error}")
             if len(errors) > 20:
                 click.echo(f"... et {len(errors)-20} autres erreurs")
@@ -84,7 +89,7 @@ def validate_csv(csv_file, vmaas_version, chunk_size):
             click.echo(f"\n✅ Validation réussie: {total_rows} lignes valides")
 
     except Exception as e:
-        click.echo(f"\n⚠️  Erreur: {str(e)}", err=True)
+        click.echo(f"\n⚠️ Erreur: {str(e)}", err=True)
         exit(1)
 
 if __name__ == '__main__':
