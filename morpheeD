@@ -20,21 +20,34 @@ def validate_template_row(row, vmaas_version):
     if not template:
         return False, f"Template vide pour la VM '{vm_name}'"
 
-    if version.parse(vmaas_version) >= version.parse("2.0.0"):
-        template_version = extract_template_version(template)
-        if template_version is None:
-            return False, f"Format invalide pour '{template}' (doit contenir 'V-' suivi d'une version ou 'ISIOPERATION')"
+    template_version = extract_template_version(template)
+    if template_version is None:
+        return False, f"Format invalide pour '{template}' (doit contenir 'V-' suivi d'une version ou 'ISIOPERATION')"
 
-        # Cas spécial pour ISIOPERATION
-        if template_version == "ISIOPERATION":
-            return True, None
+    # Cas spécial pour ISIOPERATION
+    if template_version == "ISIOPERATION":
+        # Vérification que vMaas est ≥2.0.0 si template est ISIOPERATION
+        if version.parse(vmaas_version) < version.parse("2.0.0"):
+            return False, f"Template 'ISIOPERATION' nécessite vMaas ≥2.0.0 (version actuelle: {vmaas_version})"
+        return True, None
 
-        # Vérification des versions numériques
-        try:
-            if version.parse(template_version) < version.parse("2.0"):
+    # Vérification des versions numériques
+    try:
+        template_ver = version.parse(template_version)
+        vmaas_ver = version.parse(vmaas_version)
+
+        # Si template ≥2.0, vMaas doit être ≥2.0.0
+        if template_ver >= version.parse("2.0"):
+            if vmaas_ver < version.parse("2.0.0"):
+                return False, f"Template version {template_version} nécessite vMaas ≥2.0.0 (version actuelle: {vmaas_version})"
+
+        # Vérification originale pour les versions <2.0
+        if vmaas_ver >= version.parse("2.0.0"):
+            if template_ver < version.parse("2.0"):
                 return False, f"Version '{template_version}' < 2.0 pour '{template}'"
-        except version.InvalidVersion:
-            return False, f"Version invalide '{template_version}' dans '{template}'"
+
+    except version.InvalidVersion:
+        return False, f"Version invalide '{template_version}' dans '{template}'"
 
     return True, None
 
